@@ -60,7 +60,9 @@ services:
       # (~/.claude), the hive, and any CLI the app installs for itself.
       - munder-home:/home/node
       # The code your agents work on. Create it first (`mkdir -p workspace`) so
-      # Docker doesn't make it root-owned; the container runs as uid 1000.
+      # Docker doesn't make it root-owned. The container runs as uid 1000: if
+      # your host account is a different uid, `chown -R 1000:1000 workspace`
+      # or agents can read it but not write to it.
       - ./workspace:/workspace
     working_dir: /workspace
 

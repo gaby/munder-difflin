@@ -196,6 +196,7 @@ IDE) behaves normally.
 git clone https://github.com/chaitanyagiri/munder-difflin.git
 cd munder-difflin
 mkdir -p workspace                 # your code goes here; agents see it as /workspace
+                                   # (on uid != 1000, see the ownership note below)
 docker compose up --build          # first build takes a while — it rebuilds node-pty + better-sqlite3
 ```
 
@@ -203,8 +204,12 @@ Then open **<http://localhost:6080>** and you're on the floor. A native VNC clie
 (`vnc://localhost:5900`) works too, and is smoother than the browser for long sessions.
 
 - **Your code** — `./workspace` is mounted at `/workspace`; point new agents at a folder under it.
-  The container runs as uid 1000, so create the directory yourself rather than letting Docker make
-  it root-owned.
+  Create it yourself rather than letting Docker make it root-owned. The container runs as **uid
+  1000**, so if `id -u` says you're someone else (common on secondary or centrally-managed
+  accounts) agents can read the directory but not write to it — hand it over once:
+  ```bash
+  mkdir -p workspace && sudo chown -R 1000:1000 workspace
+  ```
 - **What persists** — the `munder-home` volume holds app config, the hive, agent CLI logins, and
   any CLI the app installs for itself. `docker compose down` keeps it; `down -v` wipes it.
 - **Agent CLIs** — `claude` is baked into the image, along with `git`, `gh` and `glab` for the
@@ -251,11 +256,15 @@ Known limits:
 - **External links stay inside.** `shell.openExternal` runs `xdg-open` *in the container*, which
   has no browser — so links to the docs, the Agent Gallery or a release page do nothing. Copy the
   URL out and open it on your host.
-- **No in-app secret storage.** No keyring means `safeStorage` is unavailable and the integrations
-  broker fails closed, by design (it never writes a secret it can't encrypt). Use environment
-  variables. You *can* override it with `ELECTRON_EXTRA_ARGS=--password-store=basic`, but that
-  backend uses a hardcoded key — obfuscation, not encryption — so treat anything stored under it as
-  plaintext on disk.
+- **No in-app secret storage.** No keyring means `safeStorage` is unavailable and the secret broker
+  fails closed, by design (it never writes a secret it can't encrypt). For **model-provider keys**
+  that's covered — the environment variables above are read directly. **Authenticated integrations**
+  (the Integrations registry: GitHub, Linear, Jira, Stripe, …) are not: they resolve credentials
+  only through the encrypted store, and an enabled record with no stored secret is dropped, so the
+  broker answers `503 no_secret`. There is no environment fallback for those. To use them here you
+  must opt into `ELECTRON_EXTRA_ARGS=--password-store=basic` — that backend uses a hardcoded key
+  (obfuscation, not encryption), so treat anything stored under it as plaintext on disk, and don't
+  put credentials you'd mind leaking behind it.
 - **No auto-update.** Rebuild the image instead.
 - **macOS/Windows-only bits** — the dock icon, the `munderdifflin://` deep link — don't apply.
 
