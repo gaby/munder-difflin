@@ -104,6 +104,15 @@ jobs:
             # agents get from a login shell — so a self-installed CLI is only
             # reachable if the npm prefix survives that reset.
             bash -lc "printf %s \$PATH" | grep -q /home/node/.npm-global/bin
+            # End to end, the way the app actually looks a CLI up
+            # (shellEnv.ts: `$SHELL -ilc which <cli>`): a binary reachable ONLY
+            # via the profile.d PATH must resolve. Catches an unset/zsh SHELL
+            # and a lost npm prefix together.
+            test "$SHELL" = /bin/bash
+            printf "#!/bin/sh\\ntrue\\n" > /home/node/.npm-global/bin/md-smoke-cli
+            chmod +x /home/node/.npm-global/bin/md-smoke-cli
+            "$SHELL" -ilc "which md-smoke-cli" | grep -q /home/node/.npm-global/bin/md-smoke-cli
+            rm -f /home/node/.npm-global/bin/md-smoke-cli
           '
 
   # ── TODO: publish ──────────────────────────────────────────────────────────

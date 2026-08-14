@@ -116,11 +116,19 @@ ENV APP_DIR=/opt/munder-difflin \
     NPM_CONFIG_PREFIX=/home/node/.npm-global \
     PATH=/home/node/.npm-global/bin:/opt/munder-difflin/node_modules/.bin:$PATH \
     ELECTRON_DISABLE_SECURITY_WARNINGS=1 \
+    SHELL=/bin/bash \
     DISPLAY_NUM=99 \
     SCREEN_GEOMETRY=1600x1000x24 \
     VNC_PORT=5900 \
     NOVNC_PORT=6080
 
+# SHELL above is load-bearing, not cosmetic: shellEnv.ts probes
+# `${SHELL:-/bin/zsh} -ilc which <cli>` to locate an agent CLI, and this image
+# has no zsh — so with SHELL unset every probe dies on ENOENT, falls back to a
+# candidate list that does not include the npm prefix, and reports `found:
+# false`. The baked-in CLI in /usr/local/bin is on that list and resolves; every
+# self-installed one would report missing forever, re-running the installer.
+#
 # Debian's /etc/profile OVERWRITES PATH for non-root logins
 # (/usr/local/bin:/usr/bin:/bin:...), and shellEnv.ts derives the PATH agents
 # get by probing an interactive login shell. Without this, a CLI the app
