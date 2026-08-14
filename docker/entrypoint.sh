@@ -98,12 +98,27 @@ still_running() {
   [ -n "${state}" ] && [ "${state}" != "Z" ]
 }
 
+# WATCHDOG_GRACE seconds between the polite ask and the forced exit.
+WATCHDOG_GRACE="${WATCHDOG_GRACE:-10}"
+
 (
   while still_running "${vnc_pid}" && still_running "${novnc_pid}"; do
     sleep 5
   done
   log "x11vnc or noVNC exited — stopping the container so it can restart"
-  kill "${main_pid}" 2>/dev/null || true
+  # SIGTERM first, in case a future build grows a handler for it. Today Electron
+  # catches SIGTERM and does nothing with it, and before-quit blocks the quit
+  # outright while any PTY is live — waiting on a confirmation dialog in a
+  # renderer nobody can reach, because the VNC path is exactly what just died.
+  # So TERM alone would leave the container up forever with no way in, and the
+  # restart policy would never fire. Escalate.
+  kill -TERM "${main_pid}" 2>/dev/null || true
+  for _ in $(seq 1 "${WATCHDOG_GRACE}"); do
+    still_running "${main_pid}" || exit 0
+    sleep 1
+  done
+  log "still running ${WATCHDOG_GRACE}s after SIGTERM — forcing exit"
+  kill -KILL "${main_pid}" 2>/dev/null || true
 ) &
 
 exec "$@"
