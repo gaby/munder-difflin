@@ -188,8 +188,9 @@ spawn your first session — the GOD agent seats itself in Michael's office auto
 ### Run it in Docker
 
 Munder Difflin is a desktop app, so the image ships the desktop with it: a virtual X display
-(Xvfb) exported over VNC, with [noVNC](https://novnc.com/) serving a browser client. You watch the
-floor in a tab instead of a window — everything else (PTYs, the hive, the IDE) behaves normally.
+(Xvfb), a window manager, and [noVNC](https://novnc.com/) serving a browser client over VNC. You
+watch the floor in a browser tab instead of a native window — everything else (PTYs, the hive, the
+IDE) behaves normally.
 
 ```bash
 git clone https://github.com/chaitanyagiri/munder-difflin.git

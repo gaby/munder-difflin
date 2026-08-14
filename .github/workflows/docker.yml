@@ -89,8 +89,10 @@ jobs:
             find /opt/munder-difflin/node_modules/node-pty -name "*.node" | grep -q .
             find /opt/munder-difflin/node_modules/better-sqlite3 -name "*.node" | grep -q .
             command -v Xvfb
+            command -v openbox
             command -v x11vnc
             command -v websockify
+            test -f /etc/openbox-rc.xml
             test -e /usr/share/novnc/index.html
           '
 

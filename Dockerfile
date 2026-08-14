@@ -4,8 +4,9 @@
 #  Munder Difflin in a container.
 #
 #  This is a *desktop* app (Electron), so there is no headless mode to run: the
-#  image ships a virtual X display (Xvfb) plus x11vnc/noVNC, and you drive the
-#  floor from a browser tab at http://localhost:6080.
+#  image ships a virtual X display (Xvfb), a window manager (openbox) and
+#  x11vnc/noVNC, and you drive the floor from a browser tab at
+#  http://localhost:6080.
 #
 #  Two stages so the ~1GB of build toolchain (python3/make/g++ for node-pty and
 #  better-sqlite3) never lands in the image you actually run.
@@ -79,6 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # ---- virtual display + remote access ----
       dbus-x11 \
       novnc \
+      openbox \
       websockify \
       x11vnc \
       xvfb \
@@ -132,6 +134,7 @@ COPY --chown=node:node resources ./resources
 COPY --chown=node:node src/main/kg-core.cjs ./src/main/kg-core.cjs
 
 COPY docker/entrypoint.sh docker/run-app.sh /usr/local/bin/
+COPY docker/openbox-rc.xml /etc/openbox-rc.xml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/run-app.sh
 
 # Self-installed CLIs (~/.npm-global), agent logins (~/.claude) and the app's

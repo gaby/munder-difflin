@@ -3,6 +3,9 @@
 # Bring up the virtual desktop the Electron app needs, then hand off to CMD.
 #
 #   Xvfb       an in-memory X server — the app's only display
+#   openbox    a window manager, so the app can be moved/resized/maximized;
+#              without one, X maps the window at its default size with no title
+#              bar and no way to change either
 #   x11vnc     exports that display over VNC (port 5900)
 #   websockify serves noVNC's browser client over HTTP (port 6080)
 #
@@ -35,6 +38,11 @@ if [ ! -S "/tmp/.X11-unix/X${DISPLAY_NUM}" ]; then
   log "Xvfb failed to start on ${DISPLAY}"
   exit 1
 fi
+
+# Our own rc.xml, so openbox neither looks for Debian's menu file nor opens the
+# app at a default size inside a larger screen (it maximizes to SCREEN_GEOMETRY).
+log "starting openbox"
+openbox --config-file "${OPENBOX_CONFIG:-/etc/openbox-rc.xml}" &
 
 vnc_args=(-display "${DISPLAY}" -forever -shared -rfbport "${VNC_PORT}" -noxdamage -quiet)
 if [ -n "${VNC_PASSWORD:-}" ]; then
