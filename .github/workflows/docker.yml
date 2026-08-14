@@ -81,7 +81,11 @@ jobs:
             # runs unpackaged here, so app.isPackaged is false).
             test -f /opt/munder-difflin/resources/kg.cjs
             test -f /opt/munder-difflin/resources/md-slack-reply.cjs
-            test -d /opt/munder-difflin/resources/skills
+            # Not just the directory: .dockerignore has a *.md rule, and a bundled
+            # skill is its SKILL.md. (Docker matches *.md at the root only, so the
+            # manifests are kept — this asserts that rather than assuming it.)
+            test -f /opt/munder-difflin/resources/skills/temporal/SKILL.md
+            test -f /opt/munder-difflin/resources/skills/capabilities/SKILL.md
             test -f /opt/munder-difflin/src/main/kg-core.cjs
             test -f /opt/munder-difflin/CHANGELOG.md
             # node-pty resolves its addon from build/Release or prebuilds/ — the

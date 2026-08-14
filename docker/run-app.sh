@@ -15,13 +15,23 @@ args=(
   --disable-dev-shm-usage
   # No GPU here — the Pixi.js office floor renders through SwiftShader.
   --enable-unsafe-swiftshader
-  # There is no gnome-keyring/kwallet in the container, so Electron's
-  # safeStorage would report encryption unavailable — and the integrations
-  # secret broker refuses to write a secret it can't encrypt. `basic` gives it
-  # Chromium's built-in key: secrets stay encrypted at rest in the volume, but
-  # the key is not protected by an OS keyring. See README's Docker section.
-  --password-store=basic
 )
+
+# NOT passed here: --password-store=basic.
+#
+# There is no gnome-keyring/kwallet in the container, so safeStorage reports
+# encryption unavailable and integrations.ts:setSecret refuses to write —
+# "never writes plaintext" is a deliberate fail-closed contract. Passing
+# `basic` would satisfy isEncryptionAvailable() with Chromium's hardcoded key,
+# which is obfuscation, not encryption: it would turn that contract fail-OPEN
+# and land near-plaintext credentials in integration-secrets.json while the app
+# believed they were protected.
+#
+# So the container behaves exactly as the app does on any Linux box with no
+# keyring: in-app secret storage is unavailable, and keys come from the
+# environment instead (compose passes ANTHROPIC_API_KEY / OPENAI_API_KEY
+# through). To accept the weaker protection and re-enable in-app storage, opt
+# in explicitly:  ELECTRON_EXTRA_ARGS=--password-store=basic
 
 # Extra switches without editing this file, e.g. ELECTRON_EXTRA_ARGS=--disable-gpu.
 if [ -n "${ELECTRON_EXTRA_ARGS:-}" ]; then

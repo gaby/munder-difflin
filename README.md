@@ -210,9 +210,15 @@ Then open **<http://localhost:6080>** and you're on the floor. A native VNC clie
 - **Agent CLIs** — `claude` is baked into the image. The rest self-heal on first spawn (the harness
   runs the installer in the terminal). Build with `--build-arg AGENT_CLIS=""` to ship none.
 - **API keys** — set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in your shell or a `.env` file next to
-  `docker-compose.yml`, or enter them in **Settings → AI Engines** (they persist in the volume).
+  `docker-compose.yml`. Entering them in **Settings → AI Engines** does *not* work here: there's no
+  OS keyring, so `safeStorage` reports encryption unavailable and the secret broker fails closed
+  rather than writing a key it can't protect — the same thing it does on any Linux box without a
+  keyring. See "Known limits" below if you want to override that.
 - **Window size** — change `SCREEN_GEOMETRY` (e.g. `1920x1200x24`) in `docker-compose.yml`, then
   `docker compose up -d --force-recreate`.
+- **Timezone** — the container is UTC unless you pass one. `TZ` is forwarded from your shell, so
+  `TZ=Europe/Madrid docker compose up -d` makes the temporal skills ("today", "this week") line up
+  with your civil day.
 
 > [!WARNING]
 > Both ports are published on `127.0.0.1` and the VNC session has **no password**. Anyone who
@@ -227,11 +233,24 @@ docker compose exec munder-difflin bash   # a shell next to the agents
 docker compose down                # stop, keep the volume
 ```
 
-Known limits: the floor renders through software GL (SwiftShader), so it's slower than a native
-window; auto-update is off (rebuild the image instead); there's no OS keyring in the container, so
-integration secrets are encrypted with Chromium's built-in key (`--password-store=basic`) rather
-than a keychain; and macOS/Windows-only bits — the dock icon, the `munderdifflin://` deep link —
-don't apply. For day-to-day use on your own machine the native builds on the
+Known limits:
+
+- **Software GL.** The floor renders through SwiftShader, so it's slower than a native window.
+- **No voice.** Neither VNC nor noVNC forwards your microphone or speakers into the container, and
+  no audio device is mapped, so **Talk** / Free Flow dictation and Realtime Michael can't work here
+  even though their controls are visible.
+- **External links stay inside.** `shell.openExternal` runs `xdg-open` *in the container*, which
+  has no browser — so links to the docs, the Agent Gallery or a release page do nothing. Copy the
+  URL out and open it on your host.
+- **No in-app secret storage.** No keyring means `safeStorage` is unavailable and the integrations
+  broker fails closed, by design (it never writes a secret it can't encrypt). Use environment
+  variables. You *can* override it with `ELECTRON_EXTRA_ARGS=--password-store=basic`, but that
+  backend uses a hardcoded key — obfuscation, not encryption — so treat anything stored under it as
+  plaintext on disk.
+- **No auto-update.** Rebuild the image instead.
+- **macOS/Windows-only bits** — the dock icon, the `munderdifflin://` deep link — don't apply.
+
+For day-to-day use on your own machine the native builds on the
 [releases page](https://github.com/chaitanyagiri/munder-difflin/releases/latest) are the better
 experience — the container is for trying it out, or for parking a floor on a Linux box that runs
 24/7.

@@ -14,6 +14,9 @@ services:
     image: munder-difflin:local
     # Reap the PTYs and CLI processes agents leave behind.
     init: true
+    # The 24/7 use case: come back after a crash, a closed window, or a host
+    # reboot, rather than leaving the floor silently stopped.
+    restart: unless-stopped
     # Chromium wedges on Docker's default 64MB /dev/shm.
     shm_size: "1gb"
     ports:
@@ -24,11 +27,17 @@ services:
       - "127.0.0.1:5900:5900"
     environment:
       SCREEN_GEOMETRY: "1600x1000x24"
+      # The container is UTC unless told otherwise, and the bundled temporal
+      # skills resolve "today"/"this week" against local civil days — so an
+      # unset TZ shifts those boundaries for anyone not on UTC.
+      TZ: "${TZ:-UTC}"
       # Set this (and only then consider publishing the ports beyond localhost).
       # VNC_PASSWORD: "change-me"
       #
-      # Optional bring-your-own keys, passed through from your shell or a .env
-      # file. The app can also store them in Settings → AI Engines instead.
+      # Bring-your-own keys, passed through from your shell or a .env file.
+      # This is the only way to supply them here: with no OS keyring,
+      # safeStorage is unavailable and the in-app secret broker fails closed
+      # rather than storing a key it cannot encrypt (see docker/run-app.sh).
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
     volumes:

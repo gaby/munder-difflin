@@ -95,6 +95,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-client \
       procps \
       ripgrep \
+      tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's novnc ships vnc.html but no index.html; symlink it so the bare
