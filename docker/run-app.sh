@@ -42,4 +42,12 @@ fi
 
 # dbus-run-session gives Electron a session bus, which desktop notifications and
 # the secret/portal lookups expect; without it the app logs bus errors on boot.
-exec dbus-run-session -- "${APP_DIR}/node_modules/.bin/electron" "${APP_DIR}" "${args[@]}"
+#
+# dunst starts INSIDE that session, before Electron: a notification only shows up
+# if something owns org.freedesktop.Notifications on the same bus. libnotify
+# alone is just the client side — without a daemon, Notification.isSupported()
+# still reports true and the breaker's toasts go nowhere.
+exec dbus-run-session -- bash -c '
+  if command -v dunst >/dev/null 2>&1; then dunst & fi
+  exec "$@"
+' md-run-app "${APP_DIR}/node_modules/.bin/electron" "${APP_DIR}" "${args[@]}"

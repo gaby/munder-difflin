@@ -79,6 +79,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xdg-utils \
       # ---- virtual display + remote access ----
       dbus-x11 \
+      dunst \
       novnc \
       openbox \
       websockify \
@@ -163,7 +164,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/run-app.sh
 #
 # /tmp/.X11-unix is where Xvfb binds its socket — pre-create it, since the
 # container runs unprivileged.
-RUN mkdir -p /home/node/.npm-global /workspace /tmp/.X11-unix \
+RUN mkdir -p /home/node/.npm-global/bin /workspace /tmp/.X11-unix \
  && chown -R node:node /home/node /workspace \
  && chmod 1777 /tmp/.X11-unix
 

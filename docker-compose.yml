@@ -43,6 +43,16 @@ services:
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      # OpenCode's google/* models read this alias, not GEMINI_API_KEY. The app
+      # normally synthesizes it from the encrypted store, which is unavailable
+      # here — so it has to come in on its own.
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+      #
+      # Extra Electron switches (see docker/run-app.sh). An explicit environment
+      # map means nothing reaches the container unless it is named here, and the
+      # documented --password-store=basic opt-in is set through this.
+      ELECTRON_EXTRA_ARGS: "${ELECTRON_EXTRA_ARGS:-}"
       #
       # Git identity for commits agents (and the hive's single committer) make.
       # A fresh volume has none, and your host ~/.gitconfig isn't mounted.

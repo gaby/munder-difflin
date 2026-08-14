@@ -217,8 +217,9 @@ Then open **<http://localhost:6080>** and you're on the floor. A native VNC clie
   harness runs the installer in the terminal, and the image puts that install prefix on the
   login-shell PATH so the new binary resolves. Build with `--build-arg AGENT_CLIS=""` to ship none.
 - **API keys** — set them in your shell or a `.env` file next to `docker-compose.yml`;
-  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` and `GROQ_API_KEY`
-  are all forwarded. Entering them in **Settings → AI Engines** does *not* work here: there's no
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
+  `DEEPSEEK_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` (OpenCode's `google/*` models read that
+  alias rather than `GEMINI_API_KEY`) are all forwarded. Entering them in **Settings → AI Engines** does *not* work here: there's no
   OS keyring, so `safeStorage` reports encryption unavailable and the secret broker fails closed
   rather than writing a key it can't protect — the same thing it does on any Linux box without a
   keyring. See "Known limits" below if you want to override that.
@@ -265,6 +266,9 @@ Known limits:
   must opt into `ELECTRON_EXTRA_ARGS=--password-store=basic` — that backend uses a hardcoded key
   (obfuscation, not encryption), so treat anything stored under it as plaintext on disk, and don't
   put credentials you'd mind leaking behind it.
+- **"Open in Terminal" does nothing.** Those buttons shell out to macOS's `open -a Terminal`. This
+  isn't container-specific — it's the same on a native Linux build — but it's worth knowing before
+  you reach for them. Use the app's own terminal, or `docker compose exec munder-difflin bash`.
 - **No auto-update.** Rebuild the image instead.
 - **macOS/Windows-only bits** — the dock icon, the `munderdifflin://` deep link — don't apply.
 
