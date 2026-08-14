@@ -71,8 +71,39 @@ fi
 
 log "starting x11vnc on :${VNC_PORT}"
 x11vnc "${vnc_args[@]}" &
+vnc_pid=$!
 
 log "starting noVNC on http://localhost:${NOVNC_PORT}"
 websockify --web=/usr/share/novnc "${NOVNC_PORT}" "localhost:${VNC_PORT}" &
+novnc_pid=$!
+
+# Watchdog. The app doesn't depend on x11vnc/websockify, so if either dies the
+# container keeps "running" with Electron happily painting to a display nobody
+# can reach — and restart: unless-stopped never fires because nothing exited.
+# Take the container down instead and let the restart policy rebuild the stack.
+#
+# `exec` below preserves this shell's PID, so $$ is the PID the app will have.
+# (Xvfb needs no watching: if it dies, Electron loses its display and exits on
+# its own. openbox dying only costs window decorations, so it isn't fatal.)
+main_pid=$$
+
+# NOT `kill -0`: these helpers stay children of this PID across the exec, and the
+# app that replaces this shell never reaps them — so an exited helper lingers as
+# a zombie, which `kill -0` reports as perfectly alive. Read the state field out
+# of /proc instead (skipping past comm, which can itself contain spaces).
+still_running() {
+  local pid="$1" state
+  [ -d "/proc/${pid}" ] || return 1
+  state=$(sed 's/.*) //' "/proc/${pid}/stat" 2>/dev/null | cut -d' ' -f1) || return 1
+  [ -n "${state}" ] && [ "${state}" != "Z" ]
+}
+
+(
+  while still_running "${vnc_pid}" && still_running "${novnc_pid}"; do
+    sleep 5
+  done
+  log "x11vnc or noVNC exited — stopping the container so it can restart"
+  kill "${main_pid}" 2>/dev/null || true
+) &
 
 exec "$@"
