@@ -1,0 +1,44 @@
+# Munder Difflin in Docker — see the "Run it in Docker" section of README.md.
+#
+#   mkdir -p workspace && docker compose up --build
+#   → open http://localhost:6080
+services:
+  munder-difflin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Space-separated npm packages baked in as agent CLIs. Empty string ships
+        # none and lets the app install what you pick on first spawn.
+        AGENT_CLIS: "@anthropic-ai/claude-code"
+    image: munder-difflin:local
+    # Reap the PTYs and CLI processes agents leave behind.
+    init: true
+    # Chromium wedges on Docker's default 64MB /dev/shm.
+    shm_size: "1gb"
+    ports:
+      # noVNC — the floor, in a browser tab. Loopback-only: the VNC session has
+      # no password unless you set VNC_PASSWORD below.
+      - "127.0.0.1:6080:6080"
+      # Raw VNC, for a native client (Screen Sharing, TigerVNC, …).
+      - "127.0.0.1:5900:5900"
+    environment:
+      SCREEN_GEOMETRY: "1600x1000x24"
+      # Set this (and only then consider publishing the ports beyond localhost).
+      # VNC_PASSWORD: "change-me"
+      #
+      # Optional bring-your-own keys, passed through from your shell or a .env
+      # file. The app can also store them in Settings → AI Engines instead.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    volumes:
+      # Everything worth keeping: app config (~/.config), agent CLI logins
+      # (~/.claude), the hive, and any CLI the app installs for itself.
+      - munder-home:/home/node
+      # The code your agents work on. Create it first (`mkdir -p workspace`) so
+      # Docker doesn't make it root-owned; the container runs as uid 1000.
+      - ./workspace:/workspace
+    working_dir: /workspace
+
+volumes:
+  munder-home:

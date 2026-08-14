@@ -185,6 +185,56 @@ npm run dev        # launches the Electron app with hot reload
 On first launch you'll go through the onboarding wizard, then land on the floor. Use **Add agent** to
 spawn your first session — the GOD agent seats itself in Michael's office automatically.
 
+### Run it in Docker
+
+Munder Difflin is a desktop app, so the image ships the desktop with it: a virtual X display
+(Xvfb) exported over VNC, with [noVNC](https://novnc.com/) serving a browser client. You watch the
+floor in a tab instead of a window — everything else (PTYs, the hive, the IDE) behaves normally.
+
+```bash
+git clone https://github.com/chaitanyagiri/munder-difflin.git
+cd munder-difflin
+mkdir -p workspace                 # your code goes here; agents see it as /workspace
+docker compose up --build          # first build takes a while — it rebuilds node-pty + better-sqlite3
+```
+
+Then open **<http://localhost:6080>** and you're on the floor. A native VNC client
+(`vnc://localhost:5900`) works too, and is smoother than the browser for long sessions.
+
+- **Your code** — `./workspace` is mounted at `/workspace`; point new agents at a folder under it.
+  The container runs as uid 1000, so create the directory yourself rather than letting Docker make
+  it root-owned.
+- **What persists** — the `munder-home` volume holds app config, the hive, agent CLI logins, and
+  any CLI the app installs for itself. `docker compose down` keeps it; `down -v` wipes it.
+- **Agent CLIs** — `claude` is baked into the image. The rest self-heal on first spawn (the harness
+  runs the installer in the terminal). Build with `--build-arg AGENT_CLIS=""` to ship none.
+- **API keys** — set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in your shell or a `.env` file next to
+  `docker-compose.yml`, or enter them in **Settings → AI Engines** (they persist in the volume).
+- **Window size** — change `SCREEN_GEOMETRY` (e.g. `1920x1200x24`) in `docker-compose.yml`, then
+  `docker compose up -d --force-recreate`.
+
+> [!WARNING]
+> Both ports are published on `127.0.0.1` and the VNC session has **no password**. Anyone who
+> reaches it drives agents with your keys — set `VNC_PASSWORD` in `docker-compose.yml` before you
+> bind either port to anything but loopback.
+
+Useful while you're in there:
+
+```bash
+docker compose logs -f             # main-process logs
+docker compose exec munder-difflin bash   # a shell next to the agents
+docker compose down                # stop, keep the volume
+```
+
+Known limits: the floor renders through software GL (SwiftShader), so it's slower than a native
+window; auto-update is off (rebuild the image instead); there's no OS keyring in the container, so
+integration secrets are encrypted with Chromium's built-in key (`--password-store=basic`) rather
+than a keychain; and macOS/Windows-only bits — the dock icon, the `munderdifflin://` deep link —
+don't apply. For day-to-day use on your own machine the native builds on the
+[releases page](https://github.com/chaitanyagiri/munder-difflin/releases/latest) are the better
+experience — the container is for trying it out, or for parking a floor on a Linux box that runs
+24/7.
+
 ### Other scripts
 
 ```bash
