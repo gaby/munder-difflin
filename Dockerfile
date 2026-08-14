@@ -87,10 +87,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # ---- fonts (the UI is pixel art, but terminals still need glyphs) ----
       fonts-liberation \
       fonts-noto-color-emoji \
-      # ---- what the agents themselves shell out to ----
+      # ---- what the agents (and the GitHub/GitLab panels) shell out to ----
       ca-certificates \
       curl \
+      gh \
       git \
+      glab \
       less \
       openssh-client \
       procps \
@@ -118,6 +120,15 @@ ENV APP_DIR=/opt/munder-difflin \
     SCREEN_GEOMETRY=1600x1000x24 \
     VNC_PORT=5900 \
     NOVNC_PORT=6080
+
+# Debian's /etc/profile OVERWRITES PATH for non-root logins
+# (/usr/local/bin:/usr/bin:/bin:...), and shellEnv.ts derives the PATH agents
+# get by probing an interactive login shell. Without this, a CLI the app
+# installs for itself into NPM_CONFIG_PREFIX is invisible to every spawn — only
+# the baked-in one in /usr/local/bin would ever resolve. profile.d is sourced
+# after that assignment, so prepending here survives it.
+RUN printf '%s\n' 'export PATH="/home/node/.npm-global/bin:$PATH"' \
+      > /etc/profile.d/10-npm-global.sh
 
 WORKDIR ${APP_DIR}
 

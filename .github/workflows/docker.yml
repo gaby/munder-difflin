@@ -93,11 +93,17 @@ jobs:
             find /opt/munder-difflin/node_modules/node-pty -name "*.node" | grep -q .
             find /opt/munder-difflin/node_modules/better-sqlite3 -name "*.node" | grep -q .
             command -v Xvfb
+            command -v gh
+            command -v glab
             command -v openbox
             command -v x11vnc
             command -v websockify
             test -f /etc/openbox-rc.xml
             test -e /usr/share/novnc/index.html
+            # Debian resets PATH for non-root logins, and the app derives the PATH
+            # agents get from a login shell — so a self-installed CLI is only
+            # reachable if the npm prefix survives that reset.
+            bash -lc "printf %s \$PATH" | grep -q /home/node/.npm-global/bin
           '
 
   # ── TODO: publish ──────────────────────────────────────────────────────────

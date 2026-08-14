@@ -40,6 +40,21 @@ services:
       # rather than storing a key it cannot encrypt (see docker/run-app.sh).
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      #
+      # Git identity for commits agents (and the hive's single committer) make.
+      # A fresh volume has none, and your host ~/.gitconfig isn't mounted.
+      GIT_USER_NAME: "${GIT_USER_NAME:-}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-}"
+    # Ollama / LM Studio / vLLM usually run on the host, where `localhost` from
+    # inside the container is the container itself. Reach them at
+    # http://host.docker.internal:11434 (Docker Desktop defines this already;
+    # host-gateway is what makes it work on Linux). The model server has to be
+    # listening on 0.0.0.0, not 127.0.0.1, for the container to connect.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Everything worth keeping: app config (~/.config), agent CLI logins
       # (~/.claude), the hive, and any CLI the app installs for itself.

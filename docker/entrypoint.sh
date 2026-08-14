@@ -25,6 +25,20 @@ log() { printf '[munder-difflin] %s\n' "$*" >&2; }
 # host user — without this git refuses every command as "dubious ownership".
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 
+# A fresh volume has no git identity and the host's ~/.gitconfig isn't mounted,
+# so the first commit an agent (or the hive's single committer) tries fails with
+# "Author identity unknown". Seed it from the environment when provided; never
+# overwrite an identity the user already set inside the volume.
+if [ -n "${GIT_USER_NAME:-}" ] && ! git config --global user.name >/dev/null 2>&1; then
+  git config --global user.name "${GIT_USER_NAME}" || true
+fi
+if [ -n "${GIT_USER_EMAIL:-}" ] && ! git config --global user.email >/dev/null 2>&1; then
+  git config --global user.email "${GIT_USER_EMAIL}" || true
+fi
+if ! git config --global user.email >/dev/null 2>&1; then
+  log "no git identity — set GIT_USER_NAME / GIT_USER_EMAIL, or agents' commits will fail"
+fi
+
 log "starting Xvfb on ${DISPLAY} (${GEOMETRY})"
 Xvfb "${DISPLAY}" -screen 0 "${GEOMETRY}" -nolisten tcp -noreset &
 
