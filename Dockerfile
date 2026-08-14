@@ -93,7 +93,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       gh \
       git \
-      glab \
       less \
       openssh-client \
       procps \
@@ -122,6 +121,25 @@ RUN set -eux; \
     install -m 0755 "/tmp/uv-${uv_arch}/uv" "/tmp/uv-${uv_arch}/uvx" /usr/local/bin/; \
     rm -rf /tmp/uv.tar.gz /tmp/uv.sha256 "/tmp/uv-${uv_arch}"; \
     uv --version
+
+# glab is NOT in bookworm — it only reaches Debian in trixie — so it comes from
+# GitLab's own release assets, pinned and checksum-verified like uv above. Its
+# sole dependency is git, installed in the apt block, so dpkg -i is enough.
+ARG GLAB_VERSION=1.113.0
+RUN set -eux; \
+    glab_arch="$(dpkg --print-architecture)"; \
+    case "${glab_arch}" in \
+      amd64|arm64) ;; \
+      *) echo "unsupported arch for glab: ${glab_arch}" >&2; exit 1 ;; \
+    esac; \
+    deb="glab_${GLAB_VERSION}_linux_${glab_arch}.deb"; \
+    base="https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}"; \
+    curl -fsSL -o /tmp/glab.deb "${base}/${deb}"; \
+    curl -fsSL -o /tmp/glab.checksums "${base}/checksums.txt"; \
+    (cd /tmp && grep -F "${deb}" glab.checksums | sed "s#${deb}#glab.deb#" | sha256sum -c -); \
+    dpkg -i /tmp/glab.deb; \
+    rm -f /tmp/glab.deb /tmp/glab.checksums; \
+    glab --version
 
 # Debian's novnc ships vnc.html but no index.html; symlink it so the bare
 # http://localhost:6080/ URL lands on the client.
