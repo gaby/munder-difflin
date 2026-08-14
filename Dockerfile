@@ -11,7 +11,10 @@
 #  better-sqlite3) never lands in the image you actually run.
 # ─────────────────────────────────────────────────────────────────────────────
 
-ARG NODE_VERSION=20
+# Node 24 — the Active LTS line (supported to 2028-04-30). Node 20 went EOL on
+# 2026-04-30 and gets no more security patches. Stay on `-bookworm-` variants:
+# the runtime stage below installs Debian 12 package names.
+ARG NODE_VERSION=24
 
 # ── Stage 1: compile ─────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-bookworm-slim AS builder
