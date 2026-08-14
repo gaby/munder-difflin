@@ -269,6 +269,10 @@ Known limits:
 - **"Open in Terminal" does nothing.** Those buttons shell out to macOS's `open -a Terminal`. This
   isn't container-specific — it's the same on a native Linux build — but it's worth knowing before
   you reach for them. Use the app's own terminal, or `docker compose exec munder-difflin bash`.
+- **`docker compose stop` isn't graceful.** Electron catches SIGTERM but doesn't act on it, so the
+  container is SIGKILLed when the grace period expires and running agents are cut off mid-flight
+  (their PTYs die with the container). Quit from inside the app first — or accept that a stop is a
+  hard stop. Not container-specific: `kill` on a native Linux build behaves the same way.
 - **No auto-update.** Rebuild the image instead.
 - **macOS/Windows-only bits** — the dock icon, the `munderdifflin://` deep link — don't apply.
 

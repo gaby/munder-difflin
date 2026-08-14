@@ -101,6 +101,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       tzdata \
  && rm -rf /var/lib/apt/lists/*
 
+# The MCP servers the app turns on for every agent by default (time, fetch,
+# git — mcpCatalog.ts) are Python and launch through `uvx`, which this image
+# would otherwise not have; each would ENOENT on every spawn. Pinned, and the
+# checksum is verified because this is a release tarball rather than a package
+# from the distro. (uv fetches its own Python on first use; `uvx <pkg>` needs
+# the network anyway to install the server itself.)
+ARG UV_VERSION=0.12.4
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) uv_arch='x86_64-unknown-linux-gnu' ;; \
+      arm64) uv_arch='aarch64-unknown-linux-gnu' ;; \
+      *) echo "unsupported arch for uv" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"; \
+    curl -fsSL -o /tmp/uv.tar.gz "${base}/uv-${uv_arch}.tar.gz"; \
+    curl -fsSL -o /tmp/uv.sha256 "${base}/uv-${uv_arch}.tar.gz.sha256"; \
+    (cd /tmp && sed "s#uv-${uv_arch}.tar.gz#uv.tar.gz#" uv.sha256 | sha256sum -c -); \
+    tar -xzf /tmp/uv.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/uv-${uv_arch}/uv" "/tmp/uv-${uv_arch}/uvx" /usr/local/bin/; \
+    rm -rf /tmp/uv.tar.gz /tmp/uv.sha256 "/tmp/uv-${uv_arch}"; \
+    uv --version
+
 # Debian's novnc ships vnc.html but no index.html; symlink it so the bare
 # http://localhost:6080/ URL lands on the client.
 RUN if [ ! -e /usr/share/novnc/index.html ]; then \

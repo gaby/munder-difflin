@@ -11,6 +11,7 @@ on:
       - "docker/**"
       - "docker-compose.yml"
       - "package.json"
+      - "CHANGELOG.md"
       - "package-lock.json"
       - "src/**"
       - "resources/**"
@@ -27,6 +28,7 @@ on:
       - "docker/**"
       - "docker-compose.yml"
       - "package.json"
+      - "CHANGELOG.md"
       - "package-lock.json"
       - "src/**"
       - "resources/**"
@@ -98,6 +100,7 @@ jobs:
             command -v gh
             command -v glab
             command -v dunst
+            command -v uvx
             command -v openbox
             command -v x11vnc
             command -v websockify

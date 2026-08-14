@@ -40,14 +40,30 @@ if [ -n "${ELECTRON_EXTRA_ARGS:-}" ]; then
   args+=(${ELECTRON_EXTRA_ARGS})
 fi
 
-# dbus-run-session gives Electron a session bus, which desktop notifications and
-# the secret/portal lookups expect; without it the app logs bus errors on boot.
+# Electron needs a session bus (desktop notifications, portal lookups; without
+# one it logs bus errors on boot) — but it must NOT be started under
+# `dbus-run-session`, which is the obvious way to get one.
 #
-# dunst starts INSIDE that session, before Electron: a notification only shows up
-# if something owns org.freedesktop.Notifications on the same bus. libnotify
-# alone is just the client side — without a daemon, Notification.isSupported()
-# still reports true and the breaker's toasts go nowhere.
-exec dbus-run-session -- bash -c '
-  if command -v dunst >/dev/null 2>&1; then dunst & fi
-  exec "$@"
-' md-run-app "${APP_DIR}/node_modules/.bin/electron" "${APP_DIR}" "${args[@]}"
+# That wrapper does not forward signals: send it SIGTERM and it exits, leaving
+# the app orphaned to be SIGKILLed when the grace period runs out. `docker
+# compose stop` would then skip Electron's before-quit/will-quit entirely and
+# tear down live agents mid-flight. Verified directly: SIGTERM to a
+# `dbus-run-session -- sleep` leaves the sleep running.
+#
+# So start the bus beside the app and export its address, and let Electron be
+# the process this script execs — it then receives SIGTERM itself and shuts down
+# cleanly. The daemon is left to die with the container.
+if command -v dbus-launch >/dev/null 2>&1; then
+  eval "$(dbus-launch --sh-syntax)"
+  export DBUS_SESSION_BUS_ADDRESS
+fi
+
+# dunst has to be on that same bus, and started before Electron: a notification
+# only appears if something owns org.freedesktop.Notifications. libnotify alone
+# is just the client side — without a daemon, Notification.isSupported() still
+# reports true and the breaker's toasts go nowhere.
+if command -v dunst >/dev/null 2>&1; then
+  dunst &
+fi
+
+exec "${APP_DIR}/node_modules/.bin/electron" "${APP_DIR}" "${args[@]}"
