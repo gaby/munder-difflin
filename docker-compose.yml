@@ -50,8 +50,9 @@ services:
       GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
       #
       # Extra Electron switches (see docker/run-app.sh). An explicit environment
-      # map means nothing reaches the container unless it is named here, and the
-      # documented --password-store=basic opt-in is set through this.
+      # map means nothing reaches the container unless it is named here, so this
+      # is the only way to pass one — e.g. --disable-gpu. (Not a route to in-app
+      # secret storage: no --password-store value enables it here, measured.)
       ELECTRON_EXTRA_ARGS: "${ELECTRON_EXTRA_ARGS:-}"
       #
       # Git identity for commits agents (and the hive's single committer) make.

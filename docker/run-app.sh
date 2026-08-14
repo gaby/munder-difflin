@@ -17,21 +17,21 @@ args=(
   --enable-unsafe-swiftshader
 )
 
-# NOT passed here: --password-store=basic.
+# NOT passed here: --password-store=basic. It would make no difference anyway.
 #
-# There is no gnome-keyring/kwallet in the container, so safeStorage reports
-# encryption unavailable and integrations.ts:setSecret refuses to write —
-# "never writes plaintext" is a deliberate fail-closed contract. Passing
-# `basic` would satisfy isEncryptionAvailable() with Chromium's hardcoded key,
-# which is obfuscation, not encryption: it would turn that contract fail-OPEN
-# and land near-plaintext credentials in integration-secrets.json while the app
-# believed they were protected.
+# Measured on this Electron (32) with no keyring present, via
+# safeStorage.isEncryptionAvailable() / getSelectedStorageBackend():
 #
-# So the container behaves exactly as the app does on any Linux box with no
-# keyring: in-app secret storage is unavailable, and keys come from the
-# environment instead (compose passes ANTHROPIC_API_KEY / OPENAI_API_KEY
-# through). To accept the weaker protection and re-enable in-app storage, opt
-# in explicitly:  ELECTRON_EXTRA_ARGS=--password-store=basic
+#   no flag                        -> basic_text,      available = false
+#   --password-store=basic         -> basic_text,      available = false
+#   --password-store=gnome-libsecret -> gnome_libsecret, available = false
+#
+# So integrations.ts:setSecret ("never writes plaintext") fails closed here in
+# every configuration — Electron reports the basic_text fallback as unavailable
+# rather than handing out its hardcoded key. In-app secret storage simply does
+# not work in this container, and no flag turns it on; only a real unlocked
+# keyring daemon would, which this image does not ship. Keys come from the
+# environment instead (compose passes the provider variables through).
 
 # Extra switches without editing this file, e.g. ELECTRON_EXTRA_ARGS=--disable-gpu.
 if [ -n "${ELECTRON_EXTRA_ARGS:-}" ]; then

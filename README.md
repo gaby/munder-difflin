@@ -213,9 +213,12 @@ Then open **<http://localhost:6080>** and you're on the floor. A native VNC clie
 - **What persists** — the `munder-home` volume holds app config, the hive, agent CLI logins, and
   any CLI the app installs for itself. `docker compose down` keeps it; `down -v` wipes it.
 - **Agent CLIs** — `claude` is baked into the image, along with `git`, `gh` and `glab` for the
-  agents (and the GitHub panels) to shell out to. Other agent CLIs self-heal on first spawn — the
-  harness runs the installer in the terminal, and the image puts that install prefix on the
-  login-shell PATH so the new binary resolves. Build with `--build-arg AGENT_CLIS=""` to ship none.
+  agents (and the GitHub/GitLab panels) to shell out to. **Codex, OpenCode, Crush, pi.dev and
+  GitHub Copilot** self-heal on first spawn — the harness runs the installer in the terminal, and
+  the image puts that install prefix on the login-shell PATH so the new binary resolves. **Grok,
+  Kimi, Antigravity and Qwen carry no installer** (`agentProvider.ts` defines none), so the
+  terminal prints a manual hint and nothing launches — install those yourself inside the container,
+  or add them with `--build-arg AGENT_CLIS="…"`. `--build-arg AGENT_CLIS=""` ships none at all.
 - **API keys** — set them in your shell or a `.env` file next to `docker-compose.yml`;
   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
   `DEEPSEEK_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` (OpenCode's `google/*` models read that
@@ -257,18 +260,15 @@ Known limits:
 - **External links stay inside.** `shell.openExternal` runs `xdg-open` *in the container*, which
   has no browser — so links to the docs, the Agent Gallery or a release page do nothing. Copy the
   URL out and open it on your host.
-- **No in-app secret storage.** No keyring means `safeStorage` is unavailable and the secret broker
-  fails closed, by design (it never writes a secret it can't encrypt). For **model-provider keys**
-  that's covered — the environment variables above are read directly. **Authenticated integrations**
-  (the Integrations registry: GitHub, Linear, Jira, Stripe, …) are not: they resolve credentials
-  only through the encrypted store, and an enabled record with no stored secret is dropped, so the
-  broker answers `503 no_secret`. There is no environment fallback for those. To use them here you
-  must opt into `ELECTRON_EXTRA_ARGS=--password-store=basic` — that backend uses a hardcoded key
-  (obfuscation, not encryption), so treat anything stored under it as plaintext on disk, and don't
-  put credentials you'd mind leaking behind it.
-- **"Open in Terminal" does nothing.** Those buttons shell out to macOS's `open -a Terminal`. This
-  isn't container-specific — it's the same on a native Linux build — but it's worth knowing before
-  you reach for them. Use the app's own terminal, or `docker compose exec munder-difflin bash`.
+- **No in-app secret storage.** With no keyring, `safeStorage` reports encryption unavailable and
+  the secret broker fails closed by design — it never writes a secret it can't encrypt. For
+  **model-provider keys** that's covered: the environment variables above are read directly.
+  **Authenticated integrations** (the Integrations registry: GitHub, Linear, Jira, Stripe, …) are
+  not — they resolve credentials only through the encrypted store, and an enabled record with no
+  stored secret is dropped, so the broker answers `503 no_secret`. There is no environment fallback
+  and **no flag that turns this on**: `--password-store=basic` was measured to leave
+  `isEncryptionAvailable()` false too, so those integrations can't be used in the container as
+  shipped. Running a real unlocked keyring daemon inside it would be the only way.
 - **`docker compose stop` isn't graceful.** Electron catches SIGTERM but doesn't act on it, so the
   container is SIGKILLed when the grace period expires and running agents are cut off mid-flight
   (their PTYs die with the container). Quit from inside the app first — or accept that a stop is a
