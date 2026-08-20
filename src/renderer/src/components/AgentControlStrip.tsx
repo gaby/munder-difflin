@@ -58,10 +58,21 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 9, color: 'var(--cth-ink-500)', marginRight: 2 }}>CONTROL</span>
+        {/* Neither of these kills anything, and the two-word labels never said
+            so — the difference is WHEN the agent stops and whether it keeps its
+            session. Spelled out on hover rather than left to be discovered. */}
         <PixelButton variant={snap?.paused ? 'primary' : 'secondary'} size="sm" onClick={togglePause}>
-          {snap?.paused ? 'resume' : 'pause'}
+          <span title={snap?.paused
+            ? 'Resume — allow tool calls again. The agent keeps its session and picks up where it stopped.'
+            : 'Pause — deny every tool call from the next one onward. The agent keeps thinking and talking but cannot read, write or run anything. Takes effect immediately; reversible.'}>
+            {snap?.paused ? 'resume' : 'pause'}
+          </span>
         </PixelButton>
-        <PixelButton variant="destructive" size="sm" onClick={halt}>halt</PixelButton>
+        <PixelButton variant="destructive" size="sm" onClick={halt}>
+          <span title="Halt — ask the agent to stop CLEANLY at its next hook boundary (usually the end of the current step), instead of killing the process. Its session survives, so Restart & Continue can resume it. Use the ✕ to end the process outright.">
+            halt
+          </span>
+        </PixelButton>
         {/* v0.3.4: the auto-delivery switch moved to the god's Command Center
             header — ONE floor-wide control instead of a per-agent toggle. */}
         {snap?.autoDeliveryPaused && (

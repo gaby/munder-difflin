@@ -17,8 +17,11 @@ export type UpdateStatus =
   | { state: 'downloading'; version: string; percent: number }
   | { state: 'downloaded'; version: string; notes?: string }
   /** This install can't self-update (win-portable, or the native path failed):
-   *  notify-only, link to the release page. `reason` is the underlying error. */
-  | { state: 'available-manual'; version: string; url: string; reason?: string }
+   *  notify-only, link to the release page. `reason` is the underlying error.
+   *  `notes` is the release body — the notify-only poll already reads the same
+   *  `releases/latest` JSON that carries it, so the toast can show "what's new"
+   *  here too without a second request. */
+  | { state: 'available-manual'; version: string; url: string; reason?: string; notes?: string }
   | { state: 'error'; message: string };
 
 export type UpdateAction = 'none' | 'check' | 'download' | 'restart' | 'open-release';

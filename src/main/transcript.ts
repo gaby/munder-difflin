@@ -44,7 +44,14 @@ export function projectDir(cwd: string): string {
   const root = path.join(os.homedir(), '.claude/projects');
   const current = path.join(root, projectKey(cwd));
   if (existsSync(current)) return current;
-  const legacy = path.join(root, legacyProjectKey(cwd));
+  // For cwd '/' the legacy key is the empty string, and path.join(root, '')
+  // collapses to the projects ROOT — which always exists, so the fallback would
+  // hand back a directory holding every project rather than one, and callers
+  // would read/seed `~/.claude/projects/<session>.jsonl`. An empty key is not a
+  // project name; treat it as no legacy candidate at all.
+  const legacyKey = legacyProjectKey(cwd);
+  if (!legacyKey) return current;
+  const legacy = path.join(root, legacyKey);
   return existsSync(legacy) ? legacy : current;
 }
 

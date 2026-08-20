@@ -32,7 +32,10 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { execFileSync } = require('node:child_process');
 
-const ROOT = '/Users/chaitanya/dev/claudeTerminalHarness';
+// Resolve from THIS file, not a hardcoded checkout: the path below pointed at a
+// different clone entirely, so running the generator here would have read that
+// repo's sprite and written its assets.
+const ROOT = path.resolve(__dirname, '..');
 const loadTs = require(path.join(ROOT, 'test/load-ts.cjs'));
 const art = loadTs('src/renderer/src/scene/office/portraitArt.ts');
 
@@ -56,7 +59,18 @@ const R_STROKE = 26 / 800;
 //   mark — full bleed. Site, README, favicons, in-app toolbar, Windows .ico.
 //          A transparent margin is dead space in every one of those.
 //   icon — macOS-style margined tile with a drop shadow, for the .icns.
-const FRAMES = { mark: 0, icon: 112 / 1024 };
+// Both framings are now FULL BLEED.
+//
+// The margined variant put a band of brand yellow between the tile edge and the
+// figure, and that gap is what made the sprite's outermost columns — the far
+// edge of the hair (rows 3-11) and the outer shoulder (rows 19-24), with the
+// face between them — read as two detached dark tabs rather than as Michael's
+// own silhouette. At Dock size they looked like the edges of other characters.
+//
+// Full bleed fixes it without touching a single sprite pixel: the figure meets
+// the tile, so those columns read as the outline they are. Cropping them off
+// instead was tried and was wrong — it cut away real hair and shoulder.
+const FRAMES = { mark: 0, icon: 0 };
 
 // ── sprite ────────────────────────────────────────────────────────────────
 /** Eyes dead centre: a mark looks AT you. (Canon pupils sit at the inner pixel.) */

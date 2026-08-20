@@ -124,25 +124,29 @@ export function MemoryPanel() {
                 fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.6,
                 background: 'var(--cth-cream-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', padding: 10
               }}>
-                Meaning-based search isn't installed yet. Run these commands to set it up:
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <div style={{ color: 'var(--cth-ink-500)', fontSize: 11, marginBottom: 2 }}>
-                    If{' '}
-                    <code style={{ fontFamily: 'var(--cth-font-mono)', background: 'var(--cth-paper-100)', padding: '1px 4px', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)' }}>uv</code>
-                    {' '}isn't installed yet, install it first:
-                  </div>
-                  {[
-                    'curl -LsSf https://astral.sh/uv/install.sh | sh',
-                    'source ~/.zshrc  # or restart the terminal',
-                    'uv tool install mempalace',
-                  ].map((cmd) => (
-                    <code key={cmd} style={{
-                      display: 'block',
-                      fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-900)',
-                      background: 'var(--cth-paper-100)', padding: '3px 6px',
-                      boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
-                    }}>{cmd}</code>
-                  ))}
+                Meaning-based search isn't installed yet.
+                {/* The commands used to be inlined here, hardcoded for macOS
+                    (`curl … | sh`, `source ~/.zshrc`) — dead text under cmd.exe or
+                    PowerShell, on the platform most likely to be missing the tool.
+                    Setup owns the platform-correct commands now, plus the uv
+                    dependency, the live detected state, and the delegate-to-Michael
+                    path. One source of truth beats two that disagree by OS. */}
+                <div style={{ marginTop: 8 }}>
+                  <PixelButton
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      // Prerequisites moved from a Command Center tab into
+                      // Settings; requesting the old tab key is now a no-op that
+                      // silently does nothing on click.
+                      window.dispatchEvent(new CustomEvent('cth:open-settings', {
+                        detail: { section: 'Prerequisites' }
+                      }));
+                      setOpen(false);
+                    }}
+                  >
+                    set it up in Prerequisites →
+                  </PixelButton>
                 </div>
                 <div style={{ marginTop: 8, color: 'var(--cth-ink-500)' }}>
                   Agents still keep plain notes without it.

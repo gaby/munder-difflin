@@ -4,6 +4,7 @@ import { request as httpsRequest } from 'node:https';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readConfig } from './config';
+import { DEFAULT_DROP_HTML } from '../shared/releaseDrop';
 import { reduceStatus, clampPercent, isNewer, type UpdateStatus } from '../shared/updateState';
 
 /**
@@ -135,14 +136,18 @@ function fallbackCheck(reason: string | undefined, force = false): void {
         res.on('data', (d) => { body += d; if (body.length > 262_144) req.destroy(); });
         res.on('end', () => {
           try {
-            const rel = JSON.parse(body) as { tag_name?: string; html_url?: string };
+            const rel = JSON.parse(body) as { tag_name?: string; html_url?: string; body?: string };
             const tag = rel.tag_name ?? '';
             if (tag && isNewer(tag, app.getVersion())) {
               emit({
                 state: 'available-manual',
                 version: tag.replace(/^v/, ''),
                 url: rel.html_url ?? `https://github.com/${REPO}/releases/latest`,
-                reason
+                reason,
+                // Already in the response we just parsed — carrying it costs
+                // nothing and lets the notify-only toast show "What's new" too.
+                // NOT a new request: see TELEMETRY.md, this app never adds one.
+                notes: typeof rel.body === 'string' ? rel.body : undefined
               });
             }
           } catch { /* malformed body — try again next interval */ }
@@ -199,6 +204,35 @@ async function runDownload(): Promise<{ ok: boolean; error?: string }> {
  * Start the updater. Call once from app.whenReady with an accessor for the
  * primary window's webContents. Safe to call in dev (registers IPC, no polling).
  */
+/** DEV ONLY — a realistic release body for `update:simulate`.
+ *
+ *  Structurally a copy of the REAL v0.4.4 release body, not of CHANGELOG.md, and
+ *  the difference is load-bearing: summarizeReleaseNotes digests the first section
+ *  that yields list items, so it must skip a title, a marketing paragraph, a rule
+ *  and a `> [!IMPORTANT]` block before reaching the bullets. Fed the CHANGELOG
+ *  shape instead (bold lead paragraph, then `### Fixed`) it returns ONE bullet —
+ *  the lead paragraph, clipped mid-sentence. Verified against the published
+ *  v0.4.4-rc.1 body: this shape yields the same 3 bullets the real toast shows. */
+const SIMULATED_NOTES = `# Munder Difflin v9.9.9
+
+**A local hive of Claude Code, Antigravity, Codex, Grok & Copilot agents that run themselves** —
+messaging, routing, and remembering, coordinated by your clone, Michael, who you talk to.
+
+---
+
+## What's new in 9.9.9 — *simulated release*
+
+**On Windows, agents were never told they could message each other.** They started, rendered, and
+looked perfectly healthy — but a multi-line prompt handed to a CLI through \`cmd.exe\` is cut off at
+its first newline.
+
+- **Agent-to-agent messaging works on Windows.** Prompt-carrying spawns now run the CLI's real
+  interpreter directly instead of routing through \`cmd.exe\`, so the whole protocol survives.
+- **Setup can finish again.** Accepting the suggested \`~/HarnessAgents\` folder wrote a literal
+  \`~\`, and the wizard then died on \`ENOENT: mkdir '~/HarnessAgents'\`.
+- **Copying from a terminal is clean.** The Edit menu was intercepting ⌘C before the terminal saw it.
+- **Agent terminals are UTF-8.** They ran with no locale at all.`;
+
 export function initAutoUpdater(getWebContents: () => WebContents | null): void {
   sendTo = getWebContents;
 
@@ -226,6 +260,36 @@ export function initAutoUpdater(getWebContents: () => WebContents | null): void 
   });
   /** Re-serve the last known status to a freshly loaded window. */
   ipcMain.handle('update:current', () => lastStatus ?? { state: 'idle' });
+  /**
+   * DEV ONLY — push a synthetic status so the update toast can be seen without a
+   * real release. The toast renders for exactly two states ('downloaded' and
+   * 'available-manual'), and a dev build can reach NEITHER: the whole polling
+   * block below is behind `app.isPackaged`, and checkNow/download refuse above.
+   * So the one UI that only ever appears at release time was the one UI nobody
+   * could look at while building it.
+   *
+   * Hard-gated on `!app.isPackaged` — in a shipped build this handler answers
+   * `{ok:false}` and can never fabricate an update for a real user.
+   */
+  ipcMain.handle('update:simulate', (_evt, opts: unknown) => {
+    if (app.isPackaged) return { ok: false, error: 'simulate is dev-only' };
+    const o = (opts ?? {}) as { state?: string; version?: string; notes?: string; drop?: boolean };
+    const version = typeof o.version === 'string' && o.version ? o.version : '9.9.9';
+    // `drop: true` previews the centered release page built from the default
+    // template; without it you get the corner digest toast. Both paths ship, so
+    // both need to be previewable — defaulting to one would leave the other
+    // only ever seen by users.
+    const notes = typeof o.notes === 'string'
+      ? o.notes
+      : o.drop === true
+        ? `<!-- drop -->\n${DEFAULT_DROP_HTML}\n<!-- /drop -->`
+        : SIMULATED_NOTES;
+    emit(o.state === 'downloaded'
+      ? { state: 'downloaded', version, notes }
+      : { state: 'available-manual', version, notes, url: `https://github.com/${REPO}/releases/tag/v${version}` });
+    logLine(`SIMULATED ${o.state === 'downloaded' ? 'downloaded' : 'available-manual'} ${version} (dev only)`);
+    return { ok: true };
+  });
   ipcMain.handle('update:openRelease', (_evt, url: unknown) => {
     const href = typeof url === 'string' ? url : `https://github.com/${REPO}/releases/latest`;
     // Only ever open the project's releases page — this is not a generic opener.

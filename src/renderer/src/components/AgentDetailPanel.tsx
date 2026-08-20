@@ -119,7 +119,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
         </div>
         {/* v0.3.4: the IDE lives at agent level (replaces the old files tab) —
             opens the full-window Monaco editor rooted at this agent's workspace. */}
-        <PixelButton variant="secondary" size="sm" onClick={() => useStore.getState().setIdeOpen(true)}>
+        <PixelButton variant="secondary" size="sm" onClick={() => useStore.getState().setIdeOpen(true, agent.id)}>
           <span title={`Open the IDE — file editor + git diff for ${agent.project}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <Icon name="code" /> IDE
           </span>

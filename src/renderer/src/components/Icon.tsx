@@ -6,7 +6,8 @@ import { CSSProperties } from 'react';
 export type IconName =
   | 'gear' | 'plus' | 'x' | 'check' | 'arrow-right' | 'pause' | 'play'
   | 'bell' | 'folder' | 'terminal' | 'code' | 'web' | 'mcp' | 'sparkle'
-  | 'expand' | 'minimize' | 'clock' | 'mic' | 'ledger' | 'info' | 'sidebar';
+  | 'expand' | 'minimize' | 'clock' | 'mic' | 'ledger' | 'info' | 'sidebar'
+  | 'image';
 
 interface IconDef {
   ink: string;     // primary color path d
@@ -53,6 +54,14 @@ const paths: Record<IconName, IconDef> = {
   folder: {
     accentColor: 'var(--cth-lemon)',
     ink:   'M1 3h6v1h8v9H1V3zm1 1v8h12V5H6V4H2z'
+  },
+  // Picture frame with a stepped mountain and a sun. The frame's two subpaths
+  // cut a hole via evenodd (same trick as `terminal`); the mountain rows sit
+  // inside that hole, so each adds a third crossing and fills again.
+  image: {
+    accentColor: 'var(--cth-lemon)',
+    accent: 'M4 5h2v2H4V5z',
+    ink:   'M1 2h14v12H1V2zm1 1v10h12V3H2zM8 6h2v1H8zM7 7h4v1H7zM6 8h6v1H6zM5 9h8v1H5zM4 10h9v2H4z'
   },
   terminal: {
     accentColor: 'var(--cth-mint)',

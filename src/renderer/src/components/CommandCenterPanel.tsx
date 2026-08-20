@@ -10,6 +10,7 @@ import { AskMeTab } from './AskMeTab';
 import { TriggersTab } from './triggers/TriggersTab';
 import { TriggerHistoryTab } from './triggers/TriggerHistoryTab';
 import { WorkersTab } from './WorkersTab';
+import { SkillsTab } from './SkillsTab';
 import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool';
 import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
@@ -42,7 +43,7 @@ import { canReceiveInbox } from '@shared/agentProvider';
 // the old Schedules tab: schedules are now one of four trigger types, and the
 // whole surface lives in ./triggers (see src/shared/triggers.ts for the contract).
 type CCTab = 'terminal' | 'floor' | 'tasks' | 'human' | 'triggers' | 'trigger-history'
-  | 'memory' | 'graph' | 'activity' | 'handbook' | 'workers';
+  | 'memory' | 'graph' | 'activity' | 'skills' | 'workers';
 
 /** Fallback denominator for the per-agent token meter when no floor token budget
  *  is configured — so the bar reads as a budget estimate (filled + remaining)
@@ -70,7 +71,7 @@ const TABS: { key: CCTab; label: string; icon: Parameters<typeof Icon>[0]['name'
   { key: 'memory', label: 'memory', icon: 'sparkle' },
   { key: 'graph', label: 'graph', icon: 'web' },
   { key: 'activity', label: 'activity', icon: 'bell' },
-  { key: 'handbook', label: 'commands', icon: 'code' },
+  { key: 'skills', label: 'skills', icon: 'sparkle' },
   { key: 'workers', label: 'workers', icon: 'gear' }
 ];
 
@@ -197,7 +198,13 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
               {floorDeliveryPaused ? 'paused' : 'auto'}
             </span>
           </PixelButton>
-          <PixelButton variant="secondary" size="sm" onClick={() => useStore.getState().setIdeOpen(true)}>
+          {/* Floor-level surface with no agent of its own: the honest target is
+              whoever is selected, stated explicitly rather than left to the
+              IDE's fallback so the intent is visible at the call site. */}
+          <PixelButton variant="secondary" size="sm" onClick={() => {
+            const s = useStore.getState();
+            s.setIdeOpen(true, s.selectedId);
+          }}>
             <span title="Open the IDE — file editor + git diff" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <Icon name="code" /> IDE
             </span>
@@ -205,13 +212,37 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
         </div>
       </div>
 
-      {/* Tab bar — an auto-fit grid of equal-width cells. The tabs wrap onto
-          extra rows when the panel is narrow (e.g. window fullscreen), but every
-          column is the same width so the rows line up cleanly. The old flex-wrap
-          left ragged rows of mismatched-width tabs (e.g. a short 4-tab second row
-          under a 5-tab first row) that read as misaligned. */}
+      {/* Tab bar — ONE row, tabs at their natural width, scrolling only if the
+          panel is genuinely too narrow for all of them.
+
+          This was an auto-fit grid of equal-width cells, which had a failure mode
+          the equal widths caused: every column is sized to the WIDEST tab, so the
+          track count is set by the longest label rather than by the total width
+          the labels actually need. Adding a 12th tab tipped it over at fullscreen
+          width and dropped `setup` onto a second row with most of the first row's
+          space still unused — the tabs need ~1320px of content and had ~1610px.
+
+          Content-sized tabs fit all twelve on one line with room to spare, and the
+          `.cth-tabbar` rules in global.css (scrollbar-width: none, ::-webkit-
+          scrollbar { height: 0 }) already exist for exactly this: a single row that
+          scrolls with the scrollbar hidden. The grid never scrolled, so those rules
+          have been dead code since it landed.
+
+          Trade-off, deliberate: in the NARROW docked panel the far-right tabs now
+          scroll out of view instead of wrapping to a visible second row. One row
+          that sometimes needs a scroll beats two rows where one is nearly empty —
+          and the grid's own reason for existing (keeping wrapped rows aligned)
+          stops applying the moment there is only ever one row. */}
       <div className="cth-tabbar" style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(94px, 1fr))', gap: 4,
+        display: 'flex', gap: 4,
+        // Docked in the sidebar the panel is narrow, so tabs WRAP: a second row
+        // costs a few pixels of a tall column, while a horizontal scroll there
+        // would hide half the tabs behind a gesture with no affordance.
+        // In focus mode the panel is wide and vertical space is the scarce
+        // resource, so it stays ONE row and scrolls instead. `.cth-tabbar` in
+        // global.css already hides that scrollbar.
+        flexWrap: fullscreen ? 'nowrap' : 'wrap',
+        overflowX: fullscreen ? 'auto' : 'visible',
         padding: '6px 8px', background: 'var(--cth-cream-100)',
         borderBottom: '1px solid var(--cth-ink-700)', flexShrink: 0
       }}>
@@ -221,10 +252,18 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
             onClick={() => setTab(t.key)}
             style={{
               whiteSpace: 'nowrap',
+              // grow to share any spare width (so the strip still spans the panel
+              // exactly as the old grid did), never shrink below the label (a
+              // squashed tab is unreadable — overflow into the scroll instead).
+              flex: '1 0 auto',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
               padding: '4px 8px 3px', border: 'none', cursor: 'pointer',
               background: tab === t.key ? `var(--cth-${agent.accent})` : 'var(--cth-cream-200)',
-              color: 'var(--cth-ink-900)',
+              // The selected tab is filled with the agent's accent, which is a
+              // LIGHT colour in both themes. ink-900 flips to near-white in dark
+              // mode, so the active tab's label was pale-on-pale — the one tab
+              // you most need to read. On-accent text is dark in both themes.
+              color: tab === t.key ? 'var(--cth-on-accent)' : 'var(--cth-ink-900)',
               boxShadow: tab === t.key
                 ? 'inset 0 0 0 1px var(--cth-ink-300)'
                 : 'inset 0 0 0 1px var(--cth-ink-100)',
@@ -281,7 +320,7 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
           />
         )}
         {tab === 'activity' && <ActivityTab />}
-        {tab === 'handbook' && <HandbookTab />}
+        {tab === 'skills' && <SkillsTab agentCwd={agent.cwd} />}
         {tab === 'workers' && <WorkersTab />}
       </div>
     </PixelPanel>
@@ -404,7 +443,15 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       } catch { /* host not sized yet */ }
 
       const killed = await window.cth.killPty(a.ptyId);
-      if (!killed.ok) throw new Error(killed.error ?? 'Could not stop the current process.');
+      // A pty that is ALREADY gone is the state this kill was trying to reach, so
+      // it is not a failure. This is the single most common way to arrive at
+      // "Restart & Continue": the session died on its own — a crash, or Ctrl-C
+      // twice — main dropped it from the session map, and kill then answers
+      // `no pty: <id>`. Treating that as fatal aborted before the respawn and
+      // turned the one situation the button exists for into a dead end.
+      if (!killed.ok && !/^no pty:/.test(killed.error ?? '')) {
+        throw new Error(killed.error ?? 'Could not stop the current process.');
+      }
       if (resume) {
         // A blank xterm can retain corrupt renderer/DOM/subscription state even
         // after its PTY is healthy. Throw that one terminal away, acquire its
@@ -1189,64 +1236,6 @@ function ActivityTab() {
   );
 }
 
-// ─── Handbook tab — copyable Claude command reference ────────────────────────
-
-function HandbookTab() {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = async (cmd: string) => {
-    try { await window.cth.copyToClipboard(cmd); setCopied(cmd); setTimeout(() => setCopied((c) => (c === cmd ? null : c)), 1300); }
-    catch { /* noop */ }
-  };
-  return (
-    <Scroll>
-      <Muted>Click any command to copy it. Slash commands run inside Claude Code; CLI commands run in a shell.</Muted>
-      <div style={{ height: 8 }} />
-      {COMMAND_GROUPS.map((g) => (
-        <Section key={g.title} title={g.title}>
-          {g.items.map((it) => (
-            <div key={it.cmd} style={{
-              padding: 6, marginBottom: 6,
-              background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{
-                  fontFamily: 'var(--cth-font-display)', fontSize: 7, lineHeight: '12px',
-                  padding: '1px 4px 0', flexShrink: 0,
-                  background: it.kind === 'slash' ? 'var(--cth-sky-light)' : 'var(--cth-mint-light)',
-                  boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', color: 'var(--cth-ink-900)'
-                }}>{it.kind === 'slash' ? 'SLASH' : 'CLI'}</span>
-                <code style={{
-                  flex: 1, minWidth: 0, fontFamily: 'var(--cth-font-mono)', fontSize: 12,
-                  color: 'var(--cth-ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                }}>{it.cmd.trim() || '#'}</code>
-                <button
-                  onClick={() => copy(it.cmd)}
-                  title="Copy command"
-                  style={{
-                    flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
-                    padding: '2px 7px 1px', border: 'none', cursor: 'pointer',
-                    background: copied === it.cmd ? 'var(--cth-mint)' : 'var(--cth-cream-200)',
-                    boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                    fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-900)'
-                  }}
-                >
-                  <Icon name={copied === it.cmd ? 'check' : 'code'} /> {copied === it.cmd ? 'copied' : 'copy'}
-                </button>
-              </div>
-              <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)', marginTop: 4 }}>{it.desc}</div>
-              {it.usage && (
-                <div style={{
-                  marginTop: 3, fontFamily: 'var(--cth-font-mono)', fontSize: 11,
-                  color: 'var(--cth-ink-500)'
-                }}>e.g. {it.usage}</div>
-              )}
-            </div>
-          ))}
-        </Section>
-      ))}
-    </Scroll>
-  );
-}
 
 // ─── small shared bits ───────────────────────────────────────────────────────
 

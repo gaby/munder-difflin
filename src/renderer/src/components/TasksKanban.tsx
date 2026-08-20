@@ -7,8 +7,7 @@ import { useStore } from '@/store/store';
 
 /** A card on the task kanban. Mirrors HiveTask in the main/preload process —
  *  re-declared locally so the renderer doesn't reach into the preload package
- *  (same convention as store/config.ts). Structurally compatible with
- *  window.cth.hiveWriteTasks. */
+ *  (same convention as store/config.ts). */
 export interface HumanQA {
   q: string;
   a?: string;
@@ -131,17 +130,15 @@ export function TasksKanban() {
 
   // Dismiss a card off the board (human-initiated). The kanban is otherwise the
   // god's to write, but a person can clear a card they no longer want tracked.
-  // Operates on the RAW ledger (not the display-parsed state, which drops fields
-  // like notes/conversation) so dismissing one card never strips the others.
+  // Main removes the named id from its latest on-disk ledger, so a webhook or
+  // god card added since this renderer's last poll cannot be lost.
   const dismissTask = useCallback(async (id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id)); // optimistic
     try {
-      const raw = (await window.cth.hiveTasks()) as { tasks?: unknown[] };
-      const arr = Array.isArray(raw?.tasks) ? raw.tasks : [];
-      const next = arr.filter((t) => !(t && typeof t === 'object' && (t as { id?: unknown }).id === id));
-      await window.cth.hiveWriteTasks(next as HiveTask[]);
+      const result = await window.cth.hiveDeleteTask(id);
+      if (!result.ok) void refresh();
     } catch { /* keep last good; the next poll re-syncs from disk */ }
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     refresh();

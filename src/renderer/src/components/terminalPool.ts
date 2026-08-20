@@ -32,6 +32,7 @@ import {
   terminalAutomationBlock,
   type TerminalAutomationBlock
 } from './terminalAutomation';
+import { sanitizeTerminalSelection } from './terminalSelection';
 import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalEntry {
@@ -181,11 +182,33 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
   //   right-click                 → copy the selection, else paste (console style)
   const copySelection = (): boolean => {
     if (!term.hasSelection()) return false;
-    void window.cth.copyToClipboard(term.getSelection());
+    // Selections come off the character GRID, so any gutter the CLI painted
+    // there (Claude Code renders a blockquote as `▎ text`) is part of the
+    // copied cells. Strip it — see terminalSelection.ts.
+    const text = sanitizeTerminalSelection(term.getSelection());
+    // Still `true` when a rail-only selection sanitizes to nothing: the gesture
+    // was a copy and must stay one, or right-click would fall through to paste.
+    if (text) void window.cth.copyToClipboard(text);
     return true;
   };
+  /** Paste the clipboard into the terminal.
+   *
+   *  The read is SYNCHRONOUS on purpose. Dictation tools (muesli.works, Wispr
+   *  Flow, …) "type" by stashing the clipboard, writing the transcript, sending
+   *  the paste key, and restoring the old clipboard immediately after. The async
+   *  read this used to do came back a tick or two later — after the restore — so
+   *  the terminal pasted the text that had been on the clipboard BEFORE, and the
+   *  words the user had just spoken were dropped. Reading inside the keydown
+   *  handler closes that window entirely.
+   *
+   *  Falls back to the async read if the sync bridge is unavailable (an older
+   *  preload), so this degrades to the previous behaviour rather than to nothing. */
   const pasteClipboard = (): void => {
     if (entry.exited) return;
+    try {
+      const text = window.cth.readClipboardSync?.();
+      if (typeof text === 'string') { if (text) term.paste(text); return; }
+    } catch { /* fall through to the async path */ }
     void window.cth.readClipboard().then((t) => { if (t) term.paste(t); });
   };
   term.attachCustomKeyEventHandler((ev) => {

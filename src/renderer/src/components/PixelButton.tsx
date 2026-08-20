@@ -103,6 +103,13 @@ export function PixelButton({
         cursor: disabled ? 'not-allowed' : 'pointer',
         width: fullWidth ? '100%' : 'auto',
         userSelect: 'none',
+        // Height is fixed by the size variant above, so a label that wraps does
+        // not make the button taller — the extra line simply prints through the
+        // bottom border. Every label here is a short phrase ("Check for updates",
+        // "reset & start over"), so wrapping is always a layout bug rather than a
+        // wanted behaviour. Callers that genuinely want a multi-line button can
+        // still override, since `style` spreads after this.
+        whiteSpace: 'nowrap',
         ...style
       }}
     >

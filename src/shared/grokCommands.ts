@@ -20,7 +20,7 @@ export const GROK_COMMAND_GROUPS: CmdGroup[] = [
     title: 'MODELS & PERMISSIONS',
     items: [
       { cmd: '/model', kind: 'slash', desc: 'Switch the model used by the current session.' },
-      { cmd: 'grok --model grok-4.5', kind: 'cli', desc: 'Launch Grok with the Grok 4.5 coding model.' },
+      { cmd: 'grok --model grok-4.6', kind: 'cli', desc: 'Launch Grok with the Grok 4.6 coding model (the CLI default).' },
       { cmd: '/always-approve', kind: 'slash', desc: 'Toggle automatic approval of tool executions.' },
       { cmd: 'grok --permission-mode bypassPermissions', kind: 'cli', desc: 'Launch in always-approve mode. Munder uses this when Auto Mode is on.' }
     ]

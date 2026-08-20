@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { join, resolve, sep, basename, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
 import { resolveCommand as resolveCliCommand } from './shellEnv';
@@ -16,7 +17,7 @@ import {
   readConfig, writeConfig, resetConfig, ensureHarnessHome, ensureClaudePermissionsAccepted,
   modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
-import { listDir, readFileText, writeFileText, statAbs, expandTilde } from './fs';
+import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
 import {
   getBranch, getStatus, getLog, getBranches, getAheadBehind, isRepo, getDiff, mainRepoRoot,
   addWorktree, removeWorktree, worktreeHasUnintegratedWork, worktreeIsGcSafe,
@@ -71,6 +72,9 @@ import {
 } from '../shared/agentProvider';
 import { buildMissingCliScript, chooseInstallRung } from './cliInstall';
 import { detectNodeVersion, nodeIsUsable, resolveNodeInstaller } from './nodeInstall';
+import { toolCatalog, type ToolStatus } from '../shared/toolCatalog';
+import { listLocalSkills, loadCatalog, installSkill, uninstallSkill, type LocalSkill } from './skills';
+import { loadHero } from './hero';
 import {
   CODEX_REMOTE_SOCKET_RELATIVE,
   codexRemoteAliasPath,
@@ -436,9 +440,11 @@ function teardownPty(id: string): void {
 function informGod(subject: string, body: string, slack?: { channel: string; thread_ts: string }): void {
   try {
     const slackLine = slack
-      // `$HIVE_NODE` (injected into every agent's env) — NOT bare `node`, which is
-      // absent from the PATH of any machine whose node comes from nvm.
-      ? `\n\n[SLACK] Close the loop — post a reply to channel ${slack.channel} thread ${slack.thread_ts} via:\n  "$HIVE_NODE" "${slackReplyScriptPath()}" --channel ${slack.channel} --thread ${slack.thread_ts} --text "<your message>"`
+      // The bundled-node launcher, spelled as an ABSOLUTE PATH — NOT bare `node`
+      // (absent from the PATH of any machine whose node comes from nvm) and NOT
+      // `$HIVE_NODE` (POSIX-only: cmd.exe/PowerShell expand it to nothing, so the
+      // whole reply command was dead on Windows).
+      ? `\n\n[SLACK] Close the loop — post a reply to channel ${slack.channel} thread ${slack.thread_ts} via:\n  "${hive.nodeCommand()}" "${slackReplyScriptPath()}" --channel ${slack.channel} --thread ${slack.thread_ts} --text "<your message>"`
       : '';
     hive.send({ to: 'god', act: 'inform', subject, body: body + slackLine }, 'ephemeral-worker');
   } catch (e) {
@@ -1056,6 +1062,14 @@ function runBreakerBeat(progressWindowMs: number): void {
     // (aggregateLive picks the most-recent live session id), so this gates on
     // "is there a live session" without changing any live-agent behavior.
     if (sample?.sessionId) hive.appendCostLedger(sample); // ledger covers everyone incl. god
+    // Second source for the resume key. recordSession() is otherwise reachable
+    // ONLY from the hook shim, so any window where hooks don't land leaves the
+    // registry with no sessionId and "Restart & Continue" refuses to continue —
+    // while this very sample proves the app knew the live session id all along
+    // (it was already being written to the cost ledger one line above). Same id,
+    // same liveness gate; recordSession writes only on change, so this is a
+    // no-op once the hooks are flowing.
+    if (sample?.sessionId) hive.recordSession(id, sample.sessionId);
     if (id === reg.godId) continue;            // breaker skips god
     // Progress = fresh coordination files OR a recent OTel tool span. The span
     // leg closes the background-work blind spot: subagent/Workflow tool calls
@@ -1203,7 +1217,7 @@ let lastSlackUrl: string | undefined;
 function buildAutonomousRequestProtocol(channel: string, threadTs: string, helperPath: string): string {
   return `[AUTONOMOUS REQUEST PROTOCOL — this request arrived via Slack; no interactive human is watching] Handle it under this protocol:
 1. ROUTE FAST — triage and hand this to the single most-relevant agent right away. CHECK THE LIVE ROSTER FIRST (active agents in registry.json + their state in fleet.json) and prefer an EXISTING agent that fits — especially when the request names one ("ask Pam…", "have Jim…"): route to that agent and only spawn a new one if none is a sensible fit. Decompose only if it genuinely needs several. Don't sit on it.
-2. DELEGATE WITH THE REPLY HANDLE — tell that agent to do the work autonomously AND to post its result back to THIS Slack thread itself when done, using exactly: "$HIVE_NODE" "${helperPath}" --channel ${channel} --thread ${threadTs} --text "<substantive result>" ($HIVE_NODE is the harness's bundled Node, injected into every agent's env — bare "node" is not on the hook/agent PATH on many machines.)
+2. DELEGATE WITH THE REPLY HANDLE — tell that agent to do the work autonomously AND to post its result back to THIS Slack thread itself when done, using exactly: "${hive.nodeCommand()}" "${helperPath}" --channel ${channel} --thread ${threadTs} --text "<substantive result>" (that first path is the harness's bundled Node, already resolved for this machine — pass it verbatim; bare "node" is not on the hook/agent PATH on many machines.)
 3. AUTONOMOUS EXECUTION — no interactive questions. PAUSE/ask ONLY for high-severity actions: pushing to main or any remote; buying or spawning infrastructure or paid services; deleting an existing repo, file, or folder it did not create. Stay READ-ONLY at critical infrastructure and git-push-type changes unless explicitly approved.
 4. DIRECT, SUBSTANTIVE REPLY — the agent posts a real Slack-mrkdwn answer (short *bold* headline + the actual outcome/specifics/links), NEVER a bare "done"/":white_check_mark:".
 5. REPORT TO GOD — the agent then tells you (Michael) what it did.
@@ -2273,7 +2287,34 @@ function installAppMenu(): void {
         ? [newFloorItem, { type: 'separator' as const }, { role: 'close' as const }]
         : [newFloorItem, { type: 'separator' as const }, { role: 'quit' as const }]
     },
-    { role: 'editMenu' },
+    // The Edit menu is spelled out rather than `{ role: 'editMenu' }` for one
+    // reason: `registerAccelerator: false` on the clipboard items.
+    //
+    // A registered accelerator is claimed by the MENU, which then replays the
+    // action through `webContents.paste()` — an async hop that runs a beat after
+    // the keystroke. Dictation tools (Muesli, Wispr Flow, …) insert text by
+    // stashing the clipboard, writing the transcript, sending the paste key, and
+    // restoring the old clipboard immediately; the menu's late paste therefore
+    // read the RESTORED clipboard and typed the user's previous copy instead of
+    // what they had just said. It hit the terminal and the composer alike,
+    // because both were downstream of the same replay.
+    //
+    // With registerAccelerator false the item still shows its shortcut, but the
+    // key is left for the focused element to handle inline — xterm's own paste
+    // handler and the textarea's native paste event both read the clipboard
+    // synchronously, inside the keystroke, before any restore can land.
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const, registerAccelerator: false },
+        { role: 'redo' as const, registerAccelerator: false },
+        { type: 'separator' as const },
+        { role: 'cut' as const, registerAccelerator: false },
+        { role: 'copy' as const, registerAccelerator: false },
+        { role: 'paste' as const, registerAccelerator: false },
+        { role: 'selectAll' as const, registerAccelerator: false }
+      ]
+    },
     { role: 'viewMenu' },
     { role: 'windowMenu' }
   ];
@@ -2501,6 +2542,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         {
           semanticMemory: memory.active(),
           knowledgeGraph: knowledge.active(),
+          // Bake the ABSOLUTE KG CLI path into the agent's prompt. The prompt used
+          // to spell it `$KG_CLI`, which is POSIX-only: under cmd.exe/PowerShell it
+          // expands to nothing, so every knowledge-graph instruction was dead on a
+          // Windows floor. Empty when the KG is off (the line isn't emitted then).
+          kgCliPath: knowledge.env().KG_CLI,
           theme: readConfig().terminalTheme ?? 'light',
           // W3 — default-MCP consent state + the bundled skills source dir.
           mcpDefaults: readConfig().mcpDefaults,
@@ -2758,6 +2804,17 @@ ipcMain.handle('app:copyToClipboard', (_evt, text: unknown) => {
 ipcMain.handle('app:readClipboard', () => {
   try { return clipboard.readText(); } catch { return ''; }
 });
+// Same read, SYNCHRONOUS, for the terminal's paste shortcut.
+//
+// Dictation tools (muesli.works, Wispr Flow, …) type by stashing the user's
+// clipboard, writing the transcript, sending the paste key, then restoring the
+// old clipboard immediately. An `invoke` read returns a tick or two later — by
+// which point the restore has already landed and we paste the PREVIOUS text.
+// A `sendSync` read completes inside the keydown handler, before the tool gets
+// a chance to put the old contents back.
+ipcMain.on('app:readClipboardSync', (evt) => {
+  try { evt.returnValue = clipboard.readText(); } catch { evt.returnValue = ''; }
+});
 // NOTE: the terminal theme is mirrored into each agent's per-session Claude
 // settings at spawn (hive.ensureAgent theme option) — deliberately NOT via
 // `claude config set -g theme`, which would also restyle the user's own
@@ -2857,9 +2914,30 @@ ipcMain.handle('integrations:test', async (_evt, payload: unknown) => {
 // ─── IPC: config ────────────────────────────────────────────────────────────
 ipcMain.handle('config:get', (): HarnessConfig => readConfig());
 ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
+  // FIRST RUN: every hive-bound service is started by bootstrapHiveServices(),
+  // which runs once at app-ready and early-returns on `!hive.enabled()` — i.e.
+  // whenever harnessHome is still null, which is exactly the state a fresh
+  // install boots in. Onboarding then sets harnessHome through THIS handler and
+  // nothing re-bootstrapped, so the hook server, message router, telemetry
+  // collector and mission scheduler all stayed dead for the rest of the session.
+  //
+  // Symptom: agents spawn and run (the PTY is not hive-bound), but no hook ever
+  // reaches the app — no `hooks.sock` on disk, so no SessionStart, which means
+  // recordSession() is never called and "Restart & Continue" fails with "No
+  // recorded session ID"; the cards also sit on "ctx no status tick yet" and 0
+  // tool calls. Everything healed on the next app launch, which is what hid it.
+  //
+  // changeHome() has always handled this by relaunching; onboarding does not
+  // relaunch, so bootstrap here on the null → set transition. Gated on the
+  // transition so ordinary config writes never re-enter it.
+  const hiveWasEnabled = hive.enabled();
   const next = writeConfig(patch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
+  if (!hiveWasEnabled && hive.enabled()) {
+    console.log('[hive] harnessHome configured — bootstrapping hive services');
+    try { bootstrapHiveServices(); } catch (e) { console.error('[hive] bootstrap after onboarding:', e); }
+  }
   return next;
 });
 ipcMain.handle('config:ensureHome', (_evt, path: unknown) => {
@@ -2950,6 +3028,14 @@ ipcMain.handle('fs:listDir', (_evt, root: unknown, rel: unknown) => {
 ipcMain.handle('fs:readFile', (_evt, root: unknown, rel: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string') return { ok: false, error: 'invalid args' };
   return readFileText(root, rel);
+});
+// Raw bytes for files the text reader refuses (images). The renderer cannot
+// load them off disk itself — the CSP has no `file:` source and no file
+// protocol is registered — so the bytes come through here and become a `blob:`
+// URL on the other side. Same root confinement as every other fs handler.
+ipcMain.handle('fs:readBinary', (_evt, root: unknown, rel: unknown) => {
+  if (typeof root !== 'string' || typeof rel !== 'string') return { ok: false, error: 'invalid args' };
+  return readFileBinary(root, rel);
 });
 ipcMain.handle('fs:writeFile', (_evt, root: unknown, rel: unknown, content: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string' || typeof content !== 'string') {
@@ -3076,17 +3162,130 @@ ipcMain.handle('hive:send', (_evt, partial: Partial<HiveMessage>, from: unknown)
   const msg = hive.send(partial ?? {}, typeof from === 'string' ? from : 'system');
   return { ok: true, message: msg };
 });
-ipcMain.handle('hive:writeTasks', (_evt, tasks: unknown) => {
-  if (!Array.isArray(tasks)) return { ok: false, error: 'invalid tasks' };
+ipcMain.handle('hive:addTask', (_evt, task: unknown) => {
+  if (!task || typeof task !== 'object' || Array.isArray(task)
+    || typeof (task as { id?: unknown }).id !== 'string') {
+    return { ok: false, error: 'invalid task' };
+  }
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  hive.writeTasks(tasks as HiveTask[]);
-  return { ok: true };
+  return { ok: hive.addTask(task as HiveTask) };
+});
+ipcMain.handle('hive:patchTask', (_evt, id: unknown, patch: unknown) => {
+  if (typeof id !== 'string' || !id || !patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { ok: false, error: 'invalid task patch' };
+  }
+  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return { ok: hive.patchTask(id, patch as Partial<Omit<HiveTask, 'id'>>) };
+});
+ipcMain.handle('hive:deleteTask', (_evt, id: unknown) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'invalid task id' };
+  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return { ok: hive.deleteTask(id) };
 });
 ipcMain.handle('hive:setArchived', (_evt, id: unknown, archived: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   hive.setArchived(id, archived === true);
   return { ok: true };
+});
+
+// ─── IPC: Settings hero payload (remote data, cached) ───────────────────────
+/** Plan copy and sponsor, fetched from the repo so they can change without a
+ *  release. Validated in shared/heroPayload before it reaches the renderer. */
+ipcMain.handle('hero:payload', async (_evt, force: unknown) =>
+  loadHero(join(app.getPath('userData'), 'hero.json'), { force: force === true }));
+
+// ─── IPC: skills (installed locally, and the browsable catalog) ─────────────
+/** Skills the CLIs on this machine can already use. Scans the registered repos
+ *  plus the agent's own cwd, so a project-scoped skill shows up where it applies. */
+ipcMain.handle('skills:local', (_evt, cwd: unknown): LocalSkill[] => {
+  const cfg = readConfig();
+  const cwds = [
+    ...(typeof cwd === 'string' && cwd ? [cwd] : []),
+    ...(cfg.registeredRepos ?? [])
+  ];
+  try {
+    return listLocalSkills({ cwds, bundledDir: skillsResourceDir() });
+  } catch (e) {
+    console.error('[skills] local scan failed:', e);
+    return [];
+  }
+});
+/** The skills catalog, parsed from its README and cached in userData.
+ *  `force` is the explicit refresh button; everything else is served from a
+ *  day-old cache so opening the tab never waits on the network. */
+ipcMain.handle('skills:catalog', async (_evt, force: unknown) => {
+  const cachePath = join(app.getPath('userData'), 'skill-catalog.json');
+  return loadCatalog(cachePath, { force: force === true });
+});
+
+/** Install one catalog skill into ~/.claude/skills. Structured refusals, never a
+ *  throw: the UI distinguishes "not installable" from "install failed". */
+ipcMain.handle('skills:install', async (_evt, url: unknown, name: unknown) => {
+  if (typeof url !== 'string' || typeof name !== 'string') {
+    return { ok: false as const, error: 'bad request' };
+  }
+  return installSkill(url, name);
+});
+/** Delete an installed skill. The guard rails live in uninstallSkill — it refuses
+ *  any path it cannot prove is a skill folder inside a skills root. */
+ipcMain.handle('skills:uninstall', (_evt, path: unknown) => {
+  if (typeof path !== 'string') return { ok: false as const, error: 'bad request' };
+  const cfg = readConfig();
+  return uninstallSkill(path, { cwds: cfg.registeredRepos ?? [] });
+});
+/** Reveal a skill on disk. `openExternal` is deliberately https-only, so a
+ *  file:// URL cannot (and should not) be smuggled through it. */
+ipcMain.handle('skills:reveal', (_evt, path: unknown) => {
+  if (typeof path !== 'string' || !path.trim()) return { ok: false, error: 'bad request' };
+  const skillRoots = [join(homedir(), '.claude', 'skills'), join(homedir(), '.config', 'opencode')];
+  const target = resolve(path);
+  const inRoot = skillRoots.some((r) => target.startsWith(resolve(r) + sep))
+    || (readConfig().registeredRepos ?? []).some((c) => target.startsWith(resolve(c) + sep));
+  if (!inRoot) return { ok: false, error: 'outside a managed skills directory' };
+  shell.showItemInFolder(target);
+  return { ok: true };
+});
+
+// ─── IPC: setup catalog (which external tools are actually here) ────────────
+/**
+ * Probe every catalog row against THIS machine.
+ *
+ * Presence is a PATH resolution, not a spawn: running each candidate to read a
+ * --version would be a dozen process launches on every panel open, and several of
+ * these CLIs boot a TUI when invoked bare. `resolveCommand` returns its input
+ * unchanged when it finds nothing, so "resolved to a real, existing path that is
+ * not just the bare name" is the found test.
+ *
+ * mempalace is the one row that does NOT come from PATH: the memory subsystem
+ * already resolves it (including uv/pip locations PATH may not carry for a
+ * Finder-launched app) and knows whether the palace is initialised, so it is
+ * authoritative and reused rather than re-probed differently here.
+ */
+ipcMain.handle('tools:status', (): ToolStatus[] => {
+  const win = process.platform === 'win32';
+  const mem = (() => { try { memory.resetBinCache(); return memory.status(); } catch { return null; } })();
+  return toolCatalog().map((spec): ToolStatus => {
+    const installCommand = win ? spec.install.win32 : spec.install.posix;
+    if (spec.id === 'mempalace') {
+      return {
+        ...spec,
+        installCommand,
+        found: !!mem?.available,
+        path: mem?.bin ?? null,
+        detail: mem?.available
+          ? (mem.initialized ? 'palace initialised' : 'installed — palace not built yet')
+          : undefined
+      };
+    }
+    if (!spec.bin) return { ...spec, installCommand, found: false, path: null };
+    let path: string | null = null;
+    try {
+      const resolved = resolveCliCommand(spec.bin);
+      if (resolved !== spec.bin && existsSync(resolved)) path = resolved;
+    } catch { /* a probe must never take the panel down */ }
+    return { ...spec, installCommand, found: !!path, path };
+  });
 });
 
 // ─── IPC: semantic memory (MemPalace CLI) ───────────────────────────────────

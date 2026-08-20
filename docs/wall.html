@@ -422,8 +422,9 @@
     function render(data) {
       var list = Array.isArray(data) ? data : [];
       grid.textContent = '';
-      // newest first on the wall, but plaque numbers follow join order
-      for (var i = list.length - 1; i >= 0; i--) {
+      // join order, oldest first: Nº 001 at the top, counting down the wall,
+      // with the next open slot last — the wall reads as a numbered queue.
+      for (var i = 0; i < list.length; i++) {
         try { grid.appendChild(plaque(list[i], i + 1)); } catch (e) { /* skip a bad entry, keep the wall up */ }
       }
       grid.appendChild(openSlot(list.length + 1));

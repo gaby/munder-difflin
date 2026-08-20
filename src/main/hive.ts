@@ -94,6 +94,7 @@ export interface HumanQA {
   a?: string;
   askedAt?: string;
   answeredAt?: string;
+  dismissedAt?: string;
 }
 
 export interface HiveTask {
@@ -375,6 +376,19 @@ export class HiveManager {
     return p && existsSync(p) ? p : null;
   }
 
+  /** The ABSOLUTE bundled-node command to BAKE into any text an agent is expected
+   *  to run (`<launcher> <script> …`), falling back to bare `node`.
+   *
+   *  Exactly the value of the agent's `HIVE_NODE` env var — but agent-facing text
+   *  must never spell it as `$HIVE_NODE`: that is POSIX shell syntax. A Windows
+   *  agent runs its commands through cmd.exe/PowerShell, where `$HIVE_NODE`
+   *  expands to NOTHING (cmd) or to an undefined variable (PowerShell), so every
+   *  such instruction is dead on arrival there. The absolute path is correct on
+   *  every platform and needs no expansion at all. */
+  nodeCommand(): string {
+    return this.nodeLauncher() ?? 'node';
+  }
+
   /**
    * `<root>/bin/runtime` — the same bundled-node trick as `hive-node`, but the
    * wrapper is NAMED `node`, so anything that resolves `node` off PATH finds one.
@@ -477,7 +491,7 @@ export class HiveManager {
 
     // Keep the churny/ephemeral live files out of the hive git repo.
     const gitignore = join(root, '.gitignore');
-    const want = ['fleet.json', 'hooks.sock', '.DS_Store'];
+    const want = ['fleet.json', 'hooks.sock', 'cost-ledger.jsonl', '.DS_Store'];
     let lines: string[] = [];
     if (existsSync(gitignore)) { try { lines = readFileSync(gitignore, 'utf8').split('\n'); } catch { lines = []; } }
     const missing = want.filter((w) => !lines.includes(w));
@@ -530,6 +544,12 @@ export class HiveManager {
     opts: {
       semanticMemory?: boolean;
       knowledgeGraph?: boolean;
+      /** ABSOLUTE path to the Knowledge-Graph CLI (`knowledge.env().KG_CLI`), baked
+       *  into the agent's prompt instead of a `$KG_CLI` shell reference — `$VAR` is
+       *  POSIX-only and expands to nothing under cmd.exe/PowerShell, so the KG
+       *  instructions were unusable on Windows. Optional: undefined degrades to the
+       *  old env-var spelling. */
+      kgCliPath?: string;
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
        *  HarnessConfig by the caller; undefined → catalog defaults apply. */
@@ -606,13 +626,16 @@ export class HiveManager {
       AGENT_DIR: dir
     };
     // The bundled-node launcher, so an agent can run the hive's .cjs helpers (KG
-    // CLI, Slack reply helper) even when `node` is not on its PATH. The agent's
-    // system prompt tells it to use `"$HIVE_NODE" <script>`; invoking the Electron
-    // binary directly would open a second app window, so this must stay the
-    // wrapper path and never process.execPath.
-    // Always set (falls back to plain `node`) so agent-facing commands can be
-    // written as `"$HIVE_NODE" <script>` unconditionally and never expand to "".
-    env.HIVE_NODE = this.nodeLauncher() ?? 'node';
+    // CLI, Slack reply helper) even when `node` is not on its PATH. Invoking the
+    // Electron binary directly would open a second app window, so this must stay
+    // the wrapper path and never process.execPath.
+    //
+    // Kept as an env var for agent CONVENIENCE and for anything that reads it
+    // programmatically — but agent-facing TEXT no longer references it by name:
+    // `$HIVE_NODE` is POSIX-only syntax and expands to nothing under cmd.exe /
+    // PowerShell, so every such instruction was dead on a Windows floor. Commands
+    // we write for an agent to run bake `nodeCommand()`'s absolute path instead.
+    env.HIVE_NODE = this.nodeCommand();
 
     const claudeProvider = isClaudeProvider(meta.provider ?? 'claude');
 
@@ -634,7 +657,7 @@ export class HiveManager {
     if (!isHiveAwareProvider(meta.provider)) {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
-      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false);
+      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath);
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -755,7 +778,7 @@ export class HiveManager {
     const args: string[] = [];
     if (!claudeProvider) return { args, env };
 
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false));
+    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -1021,7 +1044,9 @@ export class HiveManager {
     const reason = [
       `You have ${fresh.length} new hive message(s) in your inbox. Address them before finishing:`,
       lines,
-      `Open the files in ${dir}/inbox/ for full detail, act on each, then move handled ones to inbox/.done/. Reply via your outbox if a message requires it.`
+      // Native separators (join, not string-concatenated `/`) so a Windows agent is
+      // handed a path its own shell/tools accept, not `C:\…\agents\god/inbox/`.
+      `Open the files in ${join(dir, 'inbox')} for full detail, act on each, then move handled ones to ${join(dir, 'inbox', '.done')}. Reply via your outbox if a message requires it.`
     ].join('\n');
     return { block: true, reason };
   }
@@ -1052,35 +1077,62 @@ export class HiveManager {
    * Anthropic's prompt cache (re-priming the whole system prompt every turn).
    * Volatile context belongs on the live channels — the inbox (hive messages) and
    * the PTY — never baked into this prefix. (Lane A #6.1.)
+   *
+   * 🪟 NO SHELL SYNTAX. Every path and command here is written the way the AGENT
+   * will actually type it, on the platform it is running on. That rules out two
+   * habits that were silently Windows-only breakage:
+   *  - `$VAR` — POSIX-only. Under cmd.exe `$HIVE_NODE`/`$KG_CLI` expand to nothing
+   *    and under PowerShell to an undefined variable, so those instructions were
+   *    dead on every Windows floor. Bake the ABSOLUTE resolved path instead: it is
+   *    platform-independent, needs no expansion, and stays prompt-cache-stable.
+   *  - `'…' + '/inbox/'` — string-concatenating separators told a Windows agent to
+   *    read `C:\Users\x\hive\agents\god/inbox/`. Use join() so the agent's own
+   *    tooling gets a path it can pass straight to its shell.
    */
-  private injectedPrompt(meta: AgentMeta, dir: string, root: string, semanticMemory: boolean, knowledgeGraph: boolean): string {
+  private injectedPrompt(
+    meta: AgentMeta,
+    dir: string,
+    root: string,
+    semanticMemory: boolean,
+    knowledgeGraph: boolean,
+    kgCliPath?: string
+  ): string {
+    // Native-separator path helpers — see the 🪟 note above.
+    const inDir = (...parts: string[]): string => join(dir, ...parts);
+    const inRoot = (...parts: string[]): string => join(root, ...parts);
     const memoryLine = semanticMemory
-      ? 'Semantic memory: the whole hive shares a searchable MemPalace at $MEMPALACE_PALACE_PATH. To recall relevant past knowledge across the team, run `mempalace search "<query>"`; run `mempalace wake-up` at the start of a task for a memory digest. Your notes in memory.md are mined into the palace automatically — write durable facts there.'
+      // The palace location is named, not spelled as `$MEMPALACE_PALACE_PATH`:
+      // `mempalace` reads that env var itself, and the POSIX `$` form was noise
+      // (or an empty expansion) for a Windows agent that tried to use it literally.
+      ? 'Semantic memory: the whole hive shares a searchable MemPalace at the path in your MEMPALACE_PALACE_PATH environment variable. To recall relevant past knowledge across the team, run `mempalace search "<query>"`; run `mempalace wake-up` at the start of a task for a memory digest. Your notes in memory.md are mined into the palace automatically — write durable facts there.'
       : '';
-    // Enterprise Knowledge Graph (opt-in). Volatile-free: references only the
-    // stable $KG_CLI / $KG_ROOT env vars injected at spawn — no paths/counts that
-    // would change per spawn and bust the prompt cache.
+    // Enterprise Knowledge Graph (opt-in). Volatile-free: the bundled-node launcher
+    // and the KG CLI are both fixed absolute paths for an install, so baking them
+    // keeps the prefix prompt-cache-stable while making the command runnable in
+    // cmd.exe/PowerShell as well as a POSIX shell.
+    const hiveNode = this.nodeCommand();
+    const kgCli = kgCliPath || (process.platform === 'win32' ? '%KG_CLI%' : '$KG_CLI');
     const knowledgeLine = knowledgeGraph
-      ? 'Enterprise knowledge: this organisation has a private Knowledge Graph of its own documents, policies, and business context. When a task needs that context — company-specific facts, house style, internal processes — query it instead of guessing: run `"$HIVE_NODE" "$KG_CLI" search "<query>"` for ranked passages, `"$HIVE_NODE" "$KG_CLI" list` to see what is available, and `"$HIVE_NODE" "$KG_CLI" get <id>` for a full document. ($HIVE_NODE is the harness\'s bundled Node — use it instead of bare `node`, which may not be on your PATH.)'
+      ? `Enterprise knowledge: this organisation has a private Knowledge Graph of its own documents, policies, and business context. When a task needs that context — company-specific facts, house style, internal processes — query it instead of guessing: run \`"${hiveNode}" "${kgCli}" search "<query>"\` for ranked passages, \`"${hiveNode}" "${kgCli}" list\` to see what is available, and \`"${hiveNode}" "${kgCli}" get <id>\` for a full document. (That first path is the harness's bundled Node — use it instead of bare \`node\`, which may not be on your PATH.)`
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
-        + ` MONITOR the floor by reading ${root}/fleet.json (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${root}/registry.json — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${root}/COMMANDS.md (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. In tasks.json, ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — set its status to "blocked" and append the concrete ask to the card's "humanQA" array (push {"q":"...","askedAt":"<iso>"}; phrase actions as clear to-dos; keep every past entry — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
+        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. In tasks.json, ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — set its status to "blocked" and append the concrete ask to the card's "humanQA" array (push {"q":"...","askedAt":"<iso>"}; phrase actions as clear to-dos; keep every past entry — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
       : meta.isAssistant
       ? 'You are Michael\'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in Michael\'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that Michael can execute autonomously, preserving the user\'s original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to Michael.'
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
     const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — todo/doing/blocked/done).';
     const slackLine = meta.isGod
       ? 'SLACK REPLIES: When composing a Slack reply (or writing the `result` field of a Slack-origin kanban card), you MUST: (1) directly address what the user asked — never a bare "done"; (2) include the relevant specifics, outcome, and details; (3) format for Slack mrkdwn — open with a short *bold* headline, use bullet points for multiple items, wrap code/paths in `backtick` blocks, keep it concise (no walls of text). When finishing a Slack-origin task, always write a complete, user-facing, well-formatted `result` on the kanban card — the system posts it verbatim to Slack as the done reply.'
-      : 'SLACK REPLIES: If god dispatches you a task that came from Slack, it will include an exact `"$HIVE_NODE" "<helper>" --channel … --thread … --text "…"` reply command — when you finish, run it VERBATIM to post your result back to that thread yourself. The reply must be SUBSTANTIVE Slack mrkdwn (a short *bold* headline + the actual outcome/specifics/links), NEVER a bare "done".';
+      : `SLACK REPLIES: If god dispatches you a task that came from Slack, it will include an exact \`"${hiveNode}" "<helper>" --channel … --thread … --text "…"\` reply command — when you finish, run it VERBATIM to post your result back to that thread yourself. The reply must be SUBSTANTIVE Slack mrkdwn (a short *bold* headline + the actual outcome/specifics/links), NEVER a bare "done".`;
     return [
       `You are "${meta.name}" (${meta.id}), an autonomous agent in a collaborating hive of Claude agents.`,
-      `Your private workspace is ${dir}. The shared hive is ${root}. Full protocol: ${root}/PROTOCOL.md.`,
+      `Your private workspace is ${dir}. The shared hive is ${root}. Full protocol: ${inRoot('PROTOCOL.md')}.`,
       '',
       'HIVE PROTOCOL — follow it every task:',
-      `1. At the START of a task, read ${dir}/memory.md and EVERY file in ${dir}/inbox/ (messages other agents sent you). After handling an inbox message, move its file into ${dir}/inbox/.done/.`,
-      `2. Record durable facts, decisions, and context by appending to ${dir}/memory.md.`,
-      `3. To ask another agent for something or share information, write ONE message JSON into ${dir}/outbox/ (schema in PROTOCOL.md). NEVER write into another agent's folder — the orchestrator delivers your outbox.`,
+      `1. At the START of a task, read ${inDir('memory.md')} and EVERY file in ${inDir('inbox')} (messages other agents sent you). After handling an inbox message, move its file into ${inDir('inbox', '.done')}.`,
+      `2. Record durable facts, decisions, and context by appending to ${inDir('memory.md')}.`,
+      `3. To ask another agent for something or share information, write ONE message JSON into ${inDir('outbox')} (schema in PROTOCOL.md). NEVER write into another agent's folder — the orchestrator delivers your outbox.`,
       '4. At the END of a task, append what you learned to memory.md so future-you remembers.',
       guardrailsLine,
       memoryLine,
@@ -1323,6 +1375,40 @@ export class HiveManager {
     this.writeJson(join(root, 'tasks.json'), { tasks });
     this.appendLog({ kind: 'tasks', count: tasks.length });
     this.commit(`hive: tasks (${tasks.length})`);
+  }
+
+  /** Append one card against the latest on-disk ledger. Renderer callers must
+   *  use this instead of re-writing a collection they read before another
+   *  source (webhook, Slack, god, voice) added work. Idempotent by task id. */
+  addTask(task: HiveTask): boolean {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+    if (tasks.some((current) => current?.id === task.id)) return false;
+    this.writeTasks([...tasks, task]);
+    return true;
+  }
+
+  /** Patch one card against the latest on-disk ledger, preserving unrelated
+   *  cards and fields (notably webhook.tokenHash and Slack thread metadata). */
+  patchTask(id: string, patch: Partial<Omit<HiveTask, 'id'>>): boolean {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+    const index = tasks.findIndex((task) => task?.id === id);
+    if (index < 0) return false;
+    const next = tasks.slice();
+    next[index] = { ...tasks[index], ...patch, id };
+    this.writeTasks(next);
+    return true;
+  }
+
+  /** Delete only the named card from the latest on-disk ledger. */
+  deleteTask(id: string): boolean {
+    const ledger = this.tasks() as { tasks?: HiveTask[] };
+    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+    const next = tasks.filter((task) => task?.id !== id);
+    if (next.length === tasks.length) return false;
+    this.writeTasks(next);
+    return true;
   }
   memory(id: string): string {
     const p = join(this.agentDir(id), 'memory.md');
@@ -1611,9 +1697,19 @@ export class HiveManager {
   private installOpenCodePlugin(dir: string): string {
     const home = join(dir, '.opencode');
     try {
-      const pluginDir = join(home, 'plugin');
-      mkdirSync(pluginDir, { recursive: true });
-      writeFileSync(join(pluginDir, 'hive-bridge.js'), OPENCODE_PLUGIN, 'utf8');
+      // BOTH `plugin/` and `plugins/`. OpenCode's current docs specify `plugins/`
+      // (plural); older builds — and the shape this bridge was originally written
+      // against — auto-load from `plugin/` (singular). Since the whole bridge is
+      // LIVE-UNVERIFIED (no BYOK keys to prove which the installed version reads),
+      // guessing one of them is a coin flip whose losing side is silent: the plugin
+      // simply never loads and the agent's only inbox drain becomes the renderer
+      // nudge. Writing the same ~2KB file twice costs nothing, is idempotent, and
+      // is correct whichever directory the installed OpenCode actually scans.
+      for (const name of ['plugin', 'plugins']) {
+        const pluginDir = join(home, name);
+        mkdirSync(pluginDir, { recursive: true });
+        writeFileSync(join(pluginDir, 'hive-bridge.js'), OPENCODE_PLUGIN, 'utf8');
+      }
     } catch (e) { console.error('[hive] installOpenCodePlugin failed:', e); }
     return home;
   }
@@ -1859,10 +1955,39 @@ export class HiveManager {
     return { ok: res.status === 0, out: res.stdout ?? '', err: res.stderr ?? '' };
   }
 
+  /** Has the one-time cost-ledger untrack pass run in this process yet? */
+  private untrackedCostLedger = false;
+
+  /**
+   * Stop versioning the cost ledger.
+   *
+   * `cost-ledger.jsonl` is append-only and gains a row per usage sample, so a
+   * repo that tracks it stores a fresh copy of the WHOLE file on every hive
+   * commit — and the hive commits constantly. A quarter-gigabyte ledger with a
+   * few thousand commits behind it is several hundred gigabytes of blob that
+   * git has to walk, which is what turns a routine `gc` into a multi-gigabyte
+   * `pack-objects` run. The ignore line in ensureHive keeps new copies out;
+   * this drops the one already in the index, because git keeps recording a
+   * file it is already tracking no matter what .gitignore says — so the ignore
+   * line alone reads as a fix while the repo goes on growing. The ledger stays
+   * on disk, so the cost history the app reads is untouched.
+   */
+  private untrackCostLedger(root: string): void {
+    if (this.untrackedCostLedger) return;
+    this.untrackedCostLedger = true;
+    // Probe before mutating: `rm --cached` on a repo that never tracked it
+    // would still rewrite the index on every launch, inside the retry path.
+    const tracked = this.git(['ls-files', '--', 'cost-ledger.jsonl'], root);
+    if (!tracked.ok || !tracked.out.trim()) return;
+    this.git(['rm', '--cached', '-q', '--ignore-unmatch', '--', 'cost-ledger.jsonl'], root);
+    console.warn('[hive] untracked the cost ledger from the hive repo');
+  }
+
   /** Commit all hive changes. No-op if there is nothing staged. */
   commit(message: string): void {
     const root = this.root();
     if (!root || !existsSync(join(root, '.git'))) return;
+    this.untrackCostLedger(root);
     for (let attempt = 0; attempt < 5; attempt++) {
       this.clearStaleLock(root);
       const add = this.git(['add', '-A'], root);

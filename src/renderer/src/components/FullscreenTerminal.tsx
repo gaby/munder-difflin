@@ -16,7 +16,7 @@ import { useStore, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import { useRestoreTeam } from '@/hooks/useRestoreTeam';
 import { useTerminalFontSize } from './terminalFontSize';
-import { useHasTerminalDraft } from './terminalPool';
+import { useHasTerminalDraft, disposeTerminal } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import type { HarnessConfig } from '@/store/config';
 
@@ -279,6 +279,24 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
             it, so theme / exit-fullscreen / IDE must live here too. */}
         <div className="cth-titlebar-nodrag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <button
+            onClick={toggleRoster}
+            title={rosterCollapsed ? 'Show the agent list' : 'Hide the agent list — full-width terminal'}
+            aria-label={rosterCollapsed ? 'Show the agent list' : 'Hide the agent list'}
+            aria-pressed={rosterCollapsed}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 28, height: 28, padding: 0,
+              // Pressed-in when collapsed, so the rail's absence reads as a state
+              // this button is holding rather than something that broke.
+              background: rosterCollapsed ? 'var(--cth-lemon)' : 'var(--cth-paper-100)',
+              boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+              border: 'none', borderRadius: 2, cursor: 'pointer',
+              color: rosterCollapsed ? 'var(--cth-ink-900)' : 'var(--cth-ink-900)'
+            }}
+          >
+            <Icon name="sidebar" size={1} style={{ width: 16, height: 16 }} />
+          </button>
+          <button
             onClick={() => {
               const next = toggleAppTheme();
               void window.cth.updateConfig({ terminalTheme: next });
@@ -296,23 +314,32 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
           >
             {appThemeNow === 'dark' ? '☀' : '☾'}
           </button>
+          {/* Settings — the main title bar has it, so fullscreen must too:
+              anything reachable in one mode and not the other is a trap. Uses
+              App's existing `cth:open-settings` event rather than a new store
+              action, because this overlay is not a child of App. */}
           <button
-            onClick={toggleRoster}
-            title={rosterCollapsed ? 'Show the agent list' : 'Hide the agent list — full-width terminal'}
-            aria-label={rosterCollapsed ? 'Show the agent list' : 'Hide the agent list'}
-            aria-pressed={rosterCollapsed}
+            className="cth-settings-btn"
+            onClick={() => window.dispatchEvent(new CustomEvent('cth:open-settings'))}
+            title="Settings"
+            aria-label="Settings"
             style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               width: 28, height: 28, padding: 0,
-              // Pressed-in when collapsed, so the rail's absence reads as a state
-              // this button is holding rather than something that broke.
-              background: rosterCollapsed ? 'var(--cth-lemon)' : 'var(--cth-paper-100)',
+              background: 'var(--cth-paper-100)',
               boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
               border: 'none', borderRadius: 2, cursor: 'pointer',
-              color: rosterCollapsed ? 'var(--cth-ink-900)' : 'var(--cth-ink-900)'
+              color: 'var(--cth-ink-900)'
             }}
           >
-            <Icon name="sidebar" size={1} style={{ width: 16, height: 16 }} />
+            <svg
+              width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth={2}
+              strokeLinecap="round" strokeLinejoin="round"
+              aria-hidden="true" focusable="false"
+            >
+              <path d="M15.5 3.5a5 5 0 0 0-6.1 6.1l-5.6 5.6a2.3 2.3 0 1 0 3.2 3.2l5.6-5.6a5 5 0 0 0 6.1-6.1l-3 3-2.2-.6-.6-2.2z" />
+            </svg>
           </button>
           <button
             onClick={() => setFullscreen(null)}
@@ -544,6 +571,43 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
   );
 }
 
+/** Model ids are long and mostly boilerplate ("claude-opus-4-8[1m]",
+ *  "anthropic/claude-sonnet-4-5"). The roster has ~120px, so show the part that
+ *  distinguishes one agent from another and keep the full id in the tooltip. */
+function shortModel(model?: string): string | null {
+  if (!model || !model.trim()) return null;
+  const tail = model.split('/').pop() ?? model;
+  return tail
+    .replace(/^claude-/i, '')
+    .replace(/-\d{8}$/, '')          // trailing date stamps
+    .replace(/\[(\d+)m\]/i, ' $1m') // [1m] → 1m
+    .replace(/-/g, ' ')
+    .trim();
+}
+
+/** Context fullness as a 3px rail. Colour tracks pressure rather than identity —
+ *  an agent at 85% is about to compact, and that matters more than its accent. */
+function ContextBar({ tokens, limit, accent }: { tokens?: number; limit?: number; accent: string }) {
+  if (tokens === undefined || !limit) return null;
+  const pct = Math.max(0, Math.min(100, Math.round((tokens / limit) * 100)));
+  const color = pct >= 85 ? 'var(--cth-coral)' : pct >= 65 ? 'var(--cth-lemon)' : `var(--cth-${accent})`;
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  return (
+    <div
+      title={`Context: ${k(tokens)} / ${k(limit)} tokens (${pct}%)`}
+      style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}
+    >
+      <span style={{
+        flex: 1, minWidth: 0, height: 3,
+        background: 'var(--cth-ink-100)', overflow: 'hidden'
+      }}>
+        <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color }} />
+      </span>
+      <span style={{ flexShrink: 0, fontSize: 9, color: 'var(--cth-ink-500)' }}>{pct}%</span>
+    </div>
+  );
+}
+
 function SidebarRow({
   agent,
   active,
@@ -681,6 +745,31 @@ function SidebarRow({
               }}
             >✎</span>
           </div>
+          {/* WHAT this agent is, at a glance. The roster used to carry only a
+              name, a portrait and a status dot — enough to tell rows apart, not
+              enough to answer "which model is this on, where is it working, and
+              how full is its context", which is exactly what you need when the
+              terminal is the whole screen and the sidebar is your only index. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+            fontSize: Math.max(9, scale.name - 3), lineHeight: 1.4,
+            color: 'var(--cth-ink-500)'
+          }}>
+            <span style={{
+              flexShrink: 0, maxWidth: '52%',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+            }} title={agent.model ? `Model: ${agent.model}` : 'Runs the CLI default model'}>
+              {shortModel(agent.model) ?? 'CLI default'}
+            </span>
+            <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+            <span style={{
+              flex: 1, minWidth: 0,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+            }} title={agent.worktreePath || agent.cwd}>
+              {basename(agent.worktreePath || agent.cwd) || agent.project}
+            </span>
+          </div>
+          <ContextBar tokens={agent.contextTokens} limit={agent.contextLimit} accent={agent.accent} />
           {/* Every line of every agent, always on screen — the roster's job is
               to answer "who is on what" without a single interaction. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -786,6 +875,33 @@ function SidebarRow({
 
 function Header({ agent }: { agent: Agent }) {
   const typing = useHasTerminalDraft(agent.ptyId);
+  const archiveAgent = useStore((st) => st.archiveAgent);
+  const [openState, setOpenState] = useState<'idle' | 'opening' | 'ok' | 'error'>('idle');
+
+  /** Same action as the docked panel: open the OS terminal in this agent's
+   *  working directory. Fullscreen had no way to do it, which is backwards —
+   *  this is the mode where you are most likely to want a shell beside it. */
+  const openTerminal = async () => {
+    setOpenState('opening');
+    try {
+      const res = await window.cth.openTerminalAt(agent.worktreePath || agent.cwd);
+      setOpenState(res.ok ? 'ok' : 'error');
+    } catch { setOpenState('error'); }
+    setTimeout(() => setOpenState('idle'), 1500);
+  };
+
+  /** Kill + archive, mirroring AgentDetailPanel. Confirmed, because it ends a
+   *  running process. God is exempt: the floor respawns it immediately, so the
+   *  button would read as "restart Michael" while looking like "close". */
+  const onKill = async () => {
+    if (!agent.ptyId) return;
+    if (!confirm(`Close ${agent.name}? The PTY process will terminate and the agent is archived (kept in history, off the floor).`)) return;
+    await window.cth.killPty(agent.ptyId);
+    disposeTerminal(agent.ptyId);
+    archiveAgent(agent.id);
+    useStore.getState().setFullscreen(null);
+  };
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -808,8 +924,11 @@ function Header({ agent }: { agent: Agent }) {
       }}>“{agent.description}”</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
         {/* v0.3.4: the IDE opens from agent level — full Monaco editor + git
-            diff over this agent's workspace. */}
-        <PixelButton variant="secondary" size="sm" onClick={() => useStore.getState().setIdeOpen(true)}>
+            diff over this agent's workspace. The id is passed EXPLICITLY:
+            fullscreen does not change the selection, so leaving the IDE to infer
+            its agent would open whichever agent happens to be selected in the
+            sidebar rather than the one filling the screen. */}
+        <PixelButton variant="secondary" size="sm" onClick={() => useStore.getState().setIdeOpen(true, agent.id)}>
           <span title="Open the IDE — file editor + git diff" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <Icon name="code" /> IDE
           </span>
@@ -820,7 +939,40 @@ function Header({ agent }: { agent: Agent }) {
             HUD stays Michael-only (it belongs to his card). */}
         <RealtimeMichaelToggle />
         {agent.isGod && <CostHud compact />}
-        <PixelBadge status={typing ? 'typing' : agent.status} />
+        <PixelButton variant="secondary" size="sm" onClick={openTerminal} disabled={openState === 'opening'}>
+          <span
+            title={`Open your terminal app at ${agent.worktreePath || agent.cwd}`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            <Icon name="terminal" />
+            {openState === 'opening' ? '...' : openState === 'ok' ? 'ok' : openState === 'error' ? 'err' : 'open'}
+          </span>
+        </PixelButton>
+        {/* The badge is a STATUS, not a button, but it sits in a row of them.
+            Its own box is 20px (lineHeight 18 + 2px padding) against the 24px
+            every size="sm" PixelButton is fixed at, so the row read as ragged.
+            Sized through the badge's own style prop rather than a wrapper: a
+            wrapper only centres the 20px box inside 24px, it does not make the
+            visible border match. */}
+        <PixelBadge
+          status={typing ? 'typing' : agent.status}
+          style={{ height: 24, padding: '0 8px', lineHeight: '24px' }}
+        />
+        {!agent.isGod && (
+          <PixelButton variant="destructive" size="sm" onClick={onKill}>
+            {/* inline-flex + center: the other buttons hold TEXT, whose line box
+                the button centres for free. A bare <Icon> is replaced-content
+                sitting on the text baseline, so it rode low and overhung the
+                24px box — the button measured the same as its neighbours while
+                reading taller than them. */}
+            <span
+              title={`Close ${agent.name} — ends the process and archives the agent`}
+              style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}
+            >
+              <Icon name="x" />
+            </span>
+          </PixelButton>
+        )}
       </div>
     </div>
   );

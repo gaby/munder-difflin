@@ -119,3 +119,14 @@ test('the real failing path resolves to the dir Claude Code actually writes', ()
     );
   });
 });
+
+test('a root cwd never resolves to the projects directory itself', () => {
+  withHome((home, _mkProject) => {
+    // legacyProjectKey('/') is the empty string, and path.join(root, '') is the
+    // projects ROOT — which always exists, so an unguarded fallback would hand
+    // back the directory holding EVERY project and seed the session file there.
+    const resolved = projectDir('/');
+    assert.notEqual(resolved, path.join(home, '.claude/projects'));
+    assert.equal(path.basename(resolved), '-');
+  });
+});

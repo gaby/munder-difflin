@@ -48,7 +48,10 @@ export function FullscreenFileEditor() {
     const s = useStore.getState();
     s.setIdeInitialFile(fullscreenFilePath);
     s.setFullscreenFile(null);
-    s.setIdeOpen(true);
+    // The owning agent is already resolved above (it is how `root` was derived),
+    // so hand it over instead of making the IDE re-guess from the selection —
+    // this overlay is often reached from a terminal link with nothing selected.
+    s.setIdeOpen(true, matchedAgent?.id ?? null);
   };
 
   const chip: React.CSSProperties = {
@@ -152,7 +155,10 @@ function SavedFilePreview({ root, rel }: { root: string; rel: string }) {
   }
   return (
     <div style={{ display: 'flex', justifyContent: 'center' }}>
-      <MarkdownPreview source={state.content} baseRel={rel} />
+      {/* `root` is what lets screenshots referenced by the report actually
+          render — it is the same root this component already reads through, so
+          images are confined to exactly the tree the text came from. */}
+      <MarkdownPreview source={state.content} baseRel={rel} root={root} />
     </div>
   );
 }

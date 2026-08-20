@@ -12,40 +12,26 @@
  * opener; relative *.md links surface through onOpenMarkdownLink so the host
  * (IDE tab / overlay) opens them in context; everything else is inert.
  */
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useWorkspaceImage } from '@/hooks/useWorkspaceImage';
+import { isExternal, isRelativeMd, resolveLocalImageRel, resolveRel } from './mdLinks';
 
 export interface MarkdownPreviewProps {
   source: string;
   /** Repo-relative path of the file being previewed (for resolving relative links). */
   baseRel?: string;
+  /** Absolute workspace root. Supplying it turns LOCAL images from placeholder
+   *  chips into actual pictures (read through the root-confined fs IPC); without
+   *  it every image stays a chip, because there is nothing to resolve against. */
+  root?: string;
   /** Open a sibling markdown file (repo-relative path) in the host's context. */
   onOpenMarkdownLink?: (rel: string) => void;
 }
 
-/** Resolve `href` against the directory of `baseRel` ('' when unknown). */
-function resolveRel(baseRel: string | undefined, href: string): string {
-  const baseDir = (baseRel ?? '').split('/').slice(0, -1);
-  const parts = [...baseDir];
-  for (const seg of href.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') { parts.pop(); continue; }
-    parts.push(seg);
-  }
-  return parts.join('/');
-}
-
-function isExternal(href: string): boolean {
-  return /^(https?:|mailto:)/i.test(href);
-}
-
-function isRelativeMd(href: string): boolean {
-  return !/^[a-z][a-z0-9+.-]*:/i.test(href) && /\.(md|markdown)(#.*)?$/i.test(href);
-}
-
 export const MarkdownPreview = memo(function MarkdownPreview({
-  source, baseRel, onOpenMarkdownLink
+  source, baseRel, root, onOpenMarkdownLink
 }: MarkdownPreviewProps) {
   return (
     <div className="cth-md-preview">
@@ -74,13 +60,17 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               </a>
             );
           },
-          // Local/remote images: remote is blocked by CSP anyway; render alt text
-          // as a placeholder chip instead of a broken-image icon.
-          img: ({ alt, src }) => (
-            <span className="cth-md-img" title={typeof src === 'string' ? src : undefined}>
-              🖼 {alt || 'image'}
-            </span>
-          )
+          // Images. LOCAL ones render for real (bytes via the root-confined fs
+          // IPC → blob URL); remote ones stay a placeholder chip. Until now
+          // every image was a chip, which meant an agent's report saying "see
+          // the screenshot below" showed a pill reading "🖼 screenshot" and the
+          // evidence was unviewable anywhere in the app.
+          img: ({ alt, src }) => {
+            const s = typeof src === 'string' ? src : undefined;
+            const rel = root ? resolveLocalImageRel(baseRel, s) : null;
+            if (!root || !rel) return <ImageChip alt={alt} src={s} />;
+            return <MdImage root={root} rel={rel} alt={alt} src={s} />;
+          }
         }}
       >
         {source}
@@ -88,3 +78,33 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     </div>
   );
 });
+
+/** Fallback for anything we won't (or can't) load: remote URLs, non-images,
+ *  and local files that turned out to be missing or undecodable. */
+function ImageChip({ alt, src, note }: { alt?: string; src?: string; note?: string }) {
+  return (
+    <span className="cth-md-img" title={src}>
+      🖼 {alt || 'image'}{note ? ` — ${note}` : ''}
+    </span>
+  );
+}
+
+/** A local image inside rendered markdown. Falls back to the chip on any
+ *  failure so a stale path in a report degrades to the old behaviour instead of
+ *  a broken-image glyph. Blob lifetime (create AND revoke) belongs to the hook. */
+function MdImage({ root, rel, alt, src }: { root: string; rel: string; alt?: string; src?: string }) {
+  const img = useWorkspaceImage(root, rel);
+  const [decodeFailed, setDecodeFailed] = useState(false);
+  if (img.status === 'loading') return <ImageChip alt={alt} src={src} note="loading" />;
+  if (img.status === 'error') return <ImageChip alt={alt} src={src} note={img.error} />;
+  if (decodeFailed) return <ImageChip alt={alt} src={src} note="could not decode" />;
+  return (
+    <img
+      className="cth-md-image"
+      src={img.url}
+      alt={alt || rel}
+      title={src}
+      onError={() => setDecodeFailed(true)}
+    />
+  );
+}

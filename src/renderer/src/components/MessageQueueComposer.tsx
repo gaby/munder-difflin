@@ -1,4 +1,5 @@
-import { ClipboardEvent, DragEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ClipboardEvent, DragEvent, KeyboardEvent, type MouseEvent as ReactMouseEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import { useStore, type Agent, type QueuedMessage } from '@/store/store';
@@ -546,27 +547,167 @@ function FreeFlowButton({ agentId, hasGroqKey }: { agentId: string; hasGroqKey: 
   // Block while another agent's clip is recording/uploading (single recorder).
   const busyElsewhere = ff.status !== 'idle' && !mine;
   const noKey = !hasGroqKey;
+
+  const hintRef = useRef<HTMLSpanElement | null>(null);
+  const iconRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [hint, setHint] = useState<{ left: number; top: number } | null>(null);
+  const hintOpen = hint !== null;
+
+  const HINT_W = 244;
+  const HINT_GAP = 8;
+  const EST_H = 188;
+
   const title = noKey
-    ? 'Add a Groq API key in Settings → Free Flow to use voice mode.'
+    ? 'Dictation needs a free Groq API key. Click the info mark for the steps.'
     : recording ? 'Stop & transcribe'
     : transcribing ? 'Transcribing…'
-    : 'Free Flow — dictate into the queue (push to talk)';
-  // Wrap in a (non-disabled) span so the native title tooltip still shows on hover
-  // even when the inner button is disabled — Chromium suppresses tooltips on a
-  // disabled <button> itself.
+    : 'Free Flow — dictate into the queue. Click, or hold Option (⌥).';
+
+  /** Same placement rule as RealtimeMichaelToggle's hint: prefer above (the
+   *  composer sits low in the panel), flip below only when there is no room, and
+   *  clamp both axes so it can never hang off an edge. */
+  const toggleHint = (e: ReactMouseEvent): void => {
+    e.stopPropagation();
+    if (hint) { setHint(null); return; }
+    const r = iconRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const above = r.top - HINT_GAP - EST_H;
+    const top = above >= 8 ? above : Math.min(r.bottom + HINT_GAP, window.innerHeight - EST_H - 8);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - HINT_W - 8));
+    setHint({ left, top: Math.max(8, top) });
+  };
+
+  useEffect(() => {
+    if (!hintOpen) return;
+    const onDown = (ev: globalThis.MouseEvent): void => {
+      const t = ev.target as Node;
+      // Portalled, so an inside-click has to be tested against BOTH nodes.
+      if (hintRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setHint(null);
+    };
+    const onKey = (ev: globalThis.KeyboardEvent): void => { if (ev.key === 'Escape') setHint(null); };
+    const onReflow = (): void => setHint(null);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onReflow);
+    window.addEventListener('scroll', onReflow, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onReflow);
+      window.removeEventListener('scroll', onReflow, true);
+    };
+  }, [hintOpen]);
+
+  const openKeySettings = (e: ReactMouseEvent): void => {
+    e.stopPropagation();
+    setHint(null);
+    window.dispatchEvent(new CustomEvent('cth:open-settings', { detail: { section: 'Voice' } }));
+  };
+
   return (
-    <span title={title} style={{ display: 'inline-flex' }}>
-      <PixelButton
-        variant={recording ? 'destructive' : 'secondary'}
-        size="sm"
-        onClick={() => { if (noKey) return; freeflowRecorder.toggle(agentId); }}
-        disabled={noKey || transcribing || busyElsewhere}
-      >
-        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <Icon name="mic" />
-          {transcribing ? '…' : recording ? 'stop' : 'voice'}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: noKey ? 4 : 0, minWidth: 0 }}>
+      {/* Wrap in a (non-disabled) span so the native tooltip still shows on hover
+          even when the inner button is disabled — Chromium suppresses tooltips on
+          a disabled <button> itself. */}
+      <span title={title} style={{ display: 'inline-flex' }}>
+        <PixelButton
+          variant={recording ? 'destructive' : 'secondary'}
+          size="sm"
+          onClick={() => { if (noKey) return; freeflowRecorder.toggle(agentId); }}
+          disabled={noKey || transcribing || busyElsewhere}
+        >
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <Icon name="mic" />
+            {transcribing ? '…' : recording ? 'stop' : 'voice'}
+          </span>
+        </PixelButton>
+      </span>
+
+      {/* A missing key is a SETUP STATE, not a failure — the same treatment Talk
+          already gets. Without this the button is simply dead on click, and the
+          two facts that would make someone act (it is FREE, and there is a
+          hold-to-talk shortcut) were written down nowhere in the UI. */}
+      {noKey && (
+        <span ref={hintRef} style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <button
+            ref={iconRef}
+            type="button"
+            aria-label="How do I enable dictation?"
+            aria-expanded={hintOpen}
+            onClick={toggleHint}
+            style={{
+              border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center',
+              color: 'var(--cth-ink-500)',
+              opacity: hintOpen ? 1 : 0.75
+            }}
+          >
+            <Icon name="info" />
+          </button>
+
+          {hint && createPortal(
+            <div
+              ref={panelRef}
+              role="dialog"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'fixed', left: hint.left, top: hint.top, zIndex: 460,
+                width: HINT_W, padding: '10px 12px', boxSizing: 'border-box',
+                display: 'flex', flexDirection: 'column', gap: 7,
+                background: 'var(--cth-paper-100)',
+                boxShadow: 'inset 0 0 0 1.5px var(--cth-ink-500), 4px 4px 0 rgba(26,19,32,0.25)',
+                fontFamily: 'var(--cth-font-ui)', fontSize: 11, lineHeight: '15px',
+                color: 'var(--cth-ink-900)', textAlign: 'left', whiteSpace: 'normal'
+              }}
+            >
+              <span style={{
+                fontFamily: 'var(--cth-font-display)', fontSize: 9, letterSpacing: 0.5,
+                textTransform: 'uppercase', color: 'var(--cth-ink-500)'
+              }}>Set up dictation</span>
+
+              {/* Lead with the cost, because "add an API key" reads as "this will
+                  bill me" and that assumption is what stops people here. */}
+              <span>
+                Speak instead of typing. Groq transcribes it, and their free tier
+                covers this — <strong>no card, no cost</strong>.
+              </span>
+
+              <ol style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <li>
+                  Create a free key at{' '}
+                  <a
+                    href="https://console.groq.com/keys"
+                    onClick={(e) => { e.preventDefault(); void window.cth.openExternal('https://console.groq.com/keys'); }}
+                    style={{ color: 'var(--cth-ink-900)' }}
+                  >console.groq.com/keys</a>
+                </li>
+                <li>Paste it into Settings → Voice → Groq API key</li>
+                <li>Click <strong>voice</strong>, or hold the <strong>right Option</strong> key to talk</li>
+              </ol>
+
+              <span style={{ color: 'var(--cth-ink-500)' }}>
+                Hold it ALONE for a moment to start; release to transcribe into
+                the composer, where you can edit before sending. Either Option key
+                works, and Option+key combos still reach the terminal untouched.
+              </span>
+
+              <button
+                type="button"
+                onClick={openKeySettings}
+                style={{
+                  border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+                  alignSelf: 'flex-start',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 11, lineHeight: '15px',
+                  color: 'var(--cth-ink-900)', textDecoration: 'underline'
+                }}
+              >set it up now</button>
+            </div>,
+            document.body
+          )}
         </span>
-      </PixelButton>
+      )}
     </span>
   );
 }

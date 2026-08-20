@@ -305,6 +305,28 @@ export function App() {
         >
           {appThemeNow === 'dark' ? '☀' : '☾'}
         </button>
+        {/* v0.3.4: the IDE button moved to agent level — every agent's header
+            (sidebar detail, god Command Center, fullscreen) carries it. */}
+        <button
+          className="cth-titlebar-nodrag cth-settings-btn"
+          onClick={() => { setSettingsSection(undefined); setSettingsOpen(true); }}
+          title="Settings"
+          aria-label="Settings"
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28, padding: 0,
+            background: 'var(--cth-paper-100)',
+            boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+            border: 'none', borderRadius: 2, cursor: 'pointer',
+            color: 'var(--cth-ink-900)'
+          }}
+        >
+          <GearGlyph />
+        </button>
+        {/* Fullscreen. The title bar is chrome, not canvas, so these two use
+            clean stroke icons rather than the 16x16 pixel set the rest of the UI
+            is drawn in — at 16-18px a pixel-grid glyph reads as a rendering
+            artifact next to the OS window controls, not as a style choice. */}
         <button
           className="cth-titlebar-nodrag"
           onClick={() => {
@@ -326,26 +348,9 @@ export function App() {
             color: 'var(--cth-ink-900)'
           }}
         >
-          <Icon name={fullscreenAgentId ? 'minimize' : 'expand'} size={1} style={{ width: 16, height: 16 }} />
+          {fullscreenAgentId ? <CollapseGlyph /> : <ExpandGlyph />}
         </button>
-        {/* v0.3.4: the IDE button moved to agent level — every agent's header
-            (sidebar detail, god Command Center, fullscreen) carries it. */}
-        <button
-          className="cth-titlebar-nodrag cth-settings-btn"
-          onClick={() => { setSettingsSection(undefined); setSettingsOpen(true); }}
-          title="Settings"
-          aria-label="Settings"
-          style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 28, height: 28, padding: 0,
-            background: 'var(--cth-paper-100)',
-            boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-            border: 'none', borderRadius: 2, cursor: 'pointer',
-            color: 'var(--cth-ink-900)'
-          }}
-        >
-          <Icon name="gear" size={1} style={{ width: 18, height: 18 }} />
-        </button>
+
       </div>
 
       <div style={{
@@ -470,5 +475,59 @@ export function App() {
       {ideOpen && <IdePanel />}
       <TaskDetailOverlay />
     </div>
+  );
+}
+
+/* ── Title-bar glyphs ────────────────────────────────────────────────────────
+   Stroke icons on a 16 unit box, inheriting `currentColor` so they follow the
+   theme exactly as the pixel set does. Deliberately NOT added to
+   components/Icon.tsx: that library is the app's pixel-art identity and is used
+   at tab and card scale, where the pixel grid is the point. These three sit
+   beside the OS traffic lights, which is the one place that identity reads as a
+   blurry asset rather than a decision. */
+function Glyph({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      width="16" height="16" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" strokeWidth={1.4}
+      strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" focusable="false"
+    >{children}</svg>
+  );
+}
+
+/** Four outward corner brackets — enter fullscreen. */
+function ExpandGlyph() {
+  return (
+    <Glyph>
+      <path d="M6.2 3H3v3.2M9.8 3H13v3.2M6.2 13H3V9.8M9.8 13H13V9.8" />
+    </Glyph>
+  );
+}
+
+/** The same brackets turned inward — leave fullscreen. */
+function CollapseGlyph() {
+  return (
+    <Glyph>
+      <path d="M3 6.2h3.2V3M13 6.2H9.8V3M3 9.8h3.2V13M13 9.8H9.8V13" />
+    </Glyph>
+  );
+}
+
+/** A wrench. The previous glyph was a hub with eight radiating spokes, which at
+ *  18px is indistinguishable from a sun — sitting immediately beside a theme
+ *  toggle whose light-mode icon IS a sun. A tool shape carries "settings"
+ *  without competing with its neighbour. Drawn on a 24 box for curve headroom
+ *  and rendered at 16. */
+function GearGlyph() {
+  return (
+    <svg
+      width="16" height="16" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" focusable="false"
+    >
+      <path d="M15.5 3.5a5 5 0 0 0-6.1 6.1l-5.6 5.6a2.3 2.3 0 1 0 3.2 3.2l5.6-5.6a5 5 0 0 0 6.1-6.1l-3 3-2.2-.6-.6-2.2z" />
+    </svg>
   );
 }

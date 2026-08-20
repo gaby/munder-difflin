@@ -4,6 +4,86 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] — 2026-08-18
+
+**Windows agents can finally talk to each other** — and the first run stops silently failing.
+Two bugs made the core product not work on the platform that accounts for roughly half of all
+downloads, and a third meant a brand-new install never started the services that carry messages
+between agents. Alongside them: a rebuilt dark mode, a Skills browser, a Prerequisites page, and
+release notes that can carry their own designed page.
+
+### Fixed
+
+- **Agent-to-agent messaging on Windows.** The hive protocol reaches an agent as a multi-line
+  command-line argument. A `.cmd` cannot go to `CreateProcess`, so any non-`.exe` target ran via
+  `cmd.exe /d /s /c "…"`, and cmd.exe cuts an argument at its first newline — taking the block
+  that names `inbox/` and `outbox/` with it. Agents booted, rendered, looked healthy, and had no
+  idea they could message anyone. Prompt-carrying spawns now decode the npm shim and launch its
+  real interpreter with an argv array; anything undecodable falls back to the previous behaviour.
+- **Windows OpenCode specifically.** `opencode-ai`'s bin is a compiled binary, so npm writes an
+  interpreter-less shim that the first fix did not model — it returned null for every Windows
+  OpenCode install and fell back to the truncating path. Direct-executable shims are now handled,
+  and the previously silent fallback logs the target it could not decode.
+- **A fresh install never started its hive services.** `bootstrapHiveServices()` early-returns
+  while `harnessHome` is null, which is exactly the state a first run boots in; onboarding then
+  set the home without re-bootstrapping. The message router, hook server, telemetry collector and
+  mission scheduler stayed dead for the whole session — mail never moved and agents never
+  reported. Now bootstrapped on the `null → set` transition.
+- **The setup wizard could not be finished.** `~/HarnessAgents` persisted with a literal `~` and
+  died on `ENOENT: mkdir`; the folder field also never pre-filled, because it read
+  `window.process.env.HOME`, which is always undefined under `contextIsolation`. An empty folder
+  now fails at step one instead of after step four, and the panel no longer overflows a short
+  screen.
+- **"Restart & Continue" had nothing to resume.** The live session id is now recorded from a
+  second source, so continuing works even when a hook never lands.
+- **Dark mode was unreadable in a specific way.** `ink-300` measured 1.73–2.09:1 against every
+  surface, and it is the structural token — 187 uses, 93 as 1px borders — so every control's edge
+  was invisible and the UI read as flat grey. Now 3.4–4.0:1, on a softer ground with warm
+  off-white text. The selected Command Center tab measured 1.55–1.87:1 (near-white on a light
+  accent); a new `--cth-on-accent` token takes it to 7.0–8.5:1.
+- **OpenCode ran a model you might not own.** It preselected a BYOK slug and silently fell back
+  when the key was absent, while every surface kept reporting the model it had asked for.
+- Terminal copy strips the CLI's quote rail and agent terminals run in UTF-8; dictation pastes
+  what was just said; task-ledger mutations are atomic; a frozen context reading no longer
+  re-fires `/compact` hourly; one odd message id no longer silences an agent's wake nudge; the
+  cost ledger stays out of the hive's git history; a root cwd no longer resolves to the projects
+  directory; the office floor stops rendering when nobody is looking at it.
+- Agent selection is visible on every card including Michael's — it used to be drawn in each
+  agent's own accent and was invisible on the one card that was always framed.
+
+### Added
+
+- **Skills** — installed skills across Claude Code, OpenCode and Codex with scope precedence,
+  plus a browsable catalog of 227 with search, category and publisher filters, install and
+  uninstall. Installs are bounded and containment-checked; uninstall refuses anything that is not
+  a `SKILL.md` folder inside a managed root.
+- **Prerequisites** (Settings) — live status for uv, git, Node, MemPalace and every agent engine,
+  with real paths, platform-correct install commands, and a button that asks Michael to fill the
+  gaps.
+- **Release drops** — a release body can carry an authored HTML page, rendered in a sandboxed
+  iframe (`sandbox=""` + `default-src 'none'`) as a centered modal.
+- **Settings hero card** — version, plan, sponsor and a way to reopen the release notes, with its
+  contents fetched from `docs/hero.json` so they can change without a build.
+- IDE image preview (PNG/SVG/markdown embeds), agent-named title, real shortcut hints.
+- The update notification says what changed, and asks for a star at most once ever.
+- Grok 4.6 in the model picker.
+- Dictation setup guidance behind an info mark on the voice button, including that Groq is free.
+- `pause` and `halt` explain what they do on hover.
+- Fullscreen gained `open` (terminal at the agent's cwd) and `✕` (end + archive), and its roster
+  cards now show model, project and a context gauge.
+
+### Changed
+
+- One card size for every agent; Michael is distinguished by surface, not by a heavier border.
+- Command Center tabs wrap when docked and scroll in fullscreen; the `commands` tab was removed.
+- Prerequisites moved out of the Command Center into Settings — it is machine-wide state, not
+  something about the agent whose terminal you are reading.
+
+### Thanks
+
+Community fixes in this release: [@gts-47](https://github.com/gts-47) (#129, #130,
+#131, #132, #133, #134, #143, #144) and [@baziyer](https://github.com/baziyer) (#142).
+
 ## [0.4.3] — 2026-08-13
 
 **A new brand mark: Michael's portrait replaces the "MD" tile.**

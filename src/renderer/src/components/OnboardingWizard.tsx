@@ -124,14 +124,21 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
   const openSettings = (url: string) => { void window.cth.openExternal(url); };
 
-  // Default-suggest a sensible harness home on first render
+  // Default-suggest a sensible harness home on first render.
+  //
+  // This used to read `window.process.env.HOME`, which is ALWAYS undefined here:
+  // the window runs with `contextIsolation: true` / `nodeIntegration: false` and
+  // the preload bridges exactly one object (`cth`), so the renderer's main world
+  // has no `process`. The suggestion therefore always collapsed to '' and the
+  // field rendered empty — leaving the copy above promising a default the user
+  // could not accept, and Finish failing with "Pick a harness home folder first."
+  //
+  // Suggest the literal `~/HarnessAgents` instead. That is exactly the string
+  // #140's normalizeHiveHome()/expandTilde() were built to absorb: it is expanded
+  // at the config-write boundary AND at ensureHarnessHome's mkdir, so every
+  // downstream reader still sees one absolute path. No new IPC surface.
   useEffect(() => {
-    if (!home) {
-      const homeDir = (window as any).process?.env?.HOME ?? '';
-      // Without a HOME env in the renderer sandbox we fall back to a hint;
-      // user can still pick whatever they want.
-      setHome(homeDir ? `${homeDir}/HarnessAgents` : '');
-    }
+    if (!home) setHome('~/HarnessAgents');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,8 +161,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const finish = async () => {
     setBusy(true);
     setError(undefined);
-    if (!home) { setError('Pick a harness home folder first.'); setBusy(false); setStep('home'); return; }
-    const ensure = await window.cth.ensureHarnessHome(home);
+    const harnessHome = home.trim(); // whitespace-only is not a folder
+    if (!harnessHome) { setError('Pick a harness home folder first.'); setBusy(false); setStep('home'); return; }
+    const ensure = await window.cth.ensureHarnessHome(harnessHome);
     if (!ensure.ok) {
       setError(ensure.error ?? 'could not create harness home');
       setBusy(false);
@@ -164,7 +172,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     const next = await window.cth.updateConfig({
       onboardingComplete: true,
       audience: audience ?? 'technical',
-      harnessHome: home,
+      harnessHome, // the same trimmed value we just mkdir'd, not the raw field
       registeredRepos: repos,
       autoMode,
       godProvider,
@@ -181,11 +189,20 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       background: 'var(--cth-cream-200)',
       backgroundImage:
         `repeating-linear-gradient(45deg, rgba(232, 217, 160, 0.4) 0 1px, transparent 1px 8px)`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      // Scroll the overlay rather than clip the wizard. Step 2 lists every
+      // installed CLI engine (8 rows + a model select), which is taller than a
+      // 1080p-class window once the OS chrome is subtracted — the panel was
+      // being cut off at BOTH edges with no way to reach the buttons.
+      display: 'flex',
+      overflowY: 'auto',
       zIndex: 200,
       padding: 32
     }}>
-      <div style={{ width: 640, maxWidth: '94vw' }}>
+      {/* `margin: auto` centers, NOT `align-items: center`. A centered flex item
+          that overflows its container is clipped at the TOP and unreachable by
+          scrolling (the overflow spills past the scroll origin); auto margins
+          center while it fits and collapse to a normal scroll once it doesn't. */}
+      <div style={{ width: 640, maxWidth: '94vw', margin: 'auto' }}>
         <PixelPanel
           variant="dialog"
           title={
@@ -672,7 +689,17 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   <PixelButton
                     variant="primary"
                     size="md"
-                    onClick={() => setStep(nextStep(step))}
+                    onClick={() => {
+                      // Validate the home step HERE. Without this the only check
+                      // lives in finish(), so an empty field walks you through all
+                      // four steps and then bounces you back to step 1 to be told.
+                      if (step === 'home' && !home.trim()) {
+                        setError('Pick a harness home folder first.');
+                        return;
+                      }
+                      setError(undefined);
+                      setStep(nextStep(step));
+                    }}
                     disabled={step === 'persona' && !audience}
                   >
                     {step === 'welcome' ? 'set it up' : 'next'}

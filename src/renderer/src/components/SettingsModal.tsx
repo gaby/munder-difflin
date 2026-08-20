@@ -13,6 +13,8 @@ import {
 import { PixelPanel } from './PixelPanel';
 import { PixelButton } from './PixelButton';
 import { UpdatesSection } from './UpdatesSection';
+import { SettingsHeroCard } from './SettingsHeroCard';
+import { SetupPanel } from './SetupPanel';
 import { Icon } from './Icon';
 import { OfficeThemePicker } from './OfficeThemePicker';
 import { McpDefaultsSettings } from './McpDefaultsSettings';
@@ -154,8 +156,8 @@ function clearLocalState(): void {
 // v0.3.4 redesign: six tabs, one topic each. 'AI Engines' folded into
 // Agents & Models; MCP + Slack + webhook + REST live together in Connections;
 // voice gets its own tab; Danger Zone became a red row at the bottom of General.
-export type Section = 'General' | 'Agents & Models' | 'Autonomy & Budgets' | 'Connections' | 'Voice' | 'Memory & Knowledge';
-const NAV_SECTIONS: Section[] = ['General', 'Agents & Models', 'Autonomy & Budgets', 'Connections', 'Voice', 'Memory & Knowledge'];
+export type Section = 'General' | 'Prerequisites' | 'Agents & Models' | 'Autonomy & Budgets' | 'Connections' | 'Voice' | 'Memory & Knowledge';
+const NAV_SECTIONS: Section[] = ['General', 'Prerequisites', 'Agents & Models', 'Autonomy & Budgets', 'Connections', 'Voice', 'Memory & Knowledge'];
 
 export function SettingsModal({ config, onClose, initialSection }: SettingsModalProps) {
   const [confirming, setConfirming] = useState(false);
@@ -867,10 +869,18 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {/* GENERAL */}
                   {activeSection === 'General' && (
                     <>
-                      {/* Updates — first, because "am I on the latest?" is the
-                          question people open Settings to answer, and the
-                          toolbar chip says nothing at all when the answer is
-                          yes. */}
+                      {/* Who you are and what this install is — version, plan,
+                          sponsor, and the app-level actions that belong to none
+                          of the settings below. Slots for a future subscription
+                          and a sponsor live here; both render nothing until set. */}
+                      <SettingsHeroCard />
+
+                      <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+
+                      {/* Updates — first among the settings proper, because "am I
+                          on the latest?" is the question people open Settings to
+                          answer, and the toolbar chip says nothing at all when
+                          the answer is yes. */}
                       <UpdatesSection />
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
@@ -1032,6 +1042,12 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   )}
 
                   {/* AGENTS & MODELS — what powers the office */}
+                  {/* PREREQUISITES — the external tools the app leans on and
+                      whether this machine has them. It was a Command Center tab,
+                      which was the wrong home: it is machine-wide state, not
+                      something about the agent whose terminal you are reading. */}
+                  {activeSection === 'Prerequisites' && <SetupPanel onDone={onClose} />}
+
                   {activeSection === 'Agents & Models' && (
                     <>
                       <div>

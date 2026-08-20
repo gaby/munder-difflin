@@ -132,6 +132,15 @@ jobs:
         with:
           # RELEASE.md is the human-facing notes; GitHub shows it as the body.
           body_path: RELEASE.md
+          # A tag carrying a pre-release suffix (v0.4.4-rc.1, -beta.2 …) publishes
+          # as a PRE-RELEASE. This is load-bearing, not cosmetic: the in-app
+          # updater polls /releases/latest, and GitHub excludes pre-releases from
+          # that endpoint. So an rc gets a real, public, shareable download page
+          # WITHOUT offering itself to every installed copy of the app — which is
+          # exactly what you want for a build that needs testing on a platform the
+          # authors cannot run. A clean `vX.Y.Z` tag is unaffected and still ships
+          # as the latest release to everyone.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg

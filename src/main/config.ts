@@ -10,7 +10,7 @@ import {
   type AgentProvider
 } from '../shared/agentProvider';
 import { defaultMcpDefaults } from '../shared/mcpCatalog';
-import { expandTilde } from './fs';
+import { expandTilde, normalizeHiveHome } from './fs';
 import type { IntegrationRecord } from '../shared/integrations';
 import {
   DEFAULT_CONTEXT_TRIGGER,
@@ -600,12 +600,20 @@ export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
       .map((r) => expandTilde(r))
       .filter((r) => r && !seen.has(r) && (seen.add(r), true));
   }
-  // Track recently-opened hive homes so the launch picker can list them. Any write
-  // that SETS harnessHome (onboarding finish, changeHome) promotes it to the front,
-  // deduped and capped. Skips empty/null so a clear doesn't pollute the list.
+  // The HIVE HOME needs the exact same treatment as registeredRepos above, and for
+  // years it did not get it (#140). Onboarding SUGGESTS `~/HarnessAgents` and the
+  // field is free text, so the common path — accept the default, press Finish —
+  // persisted a literal `~`. The first thing the finish step does is create the
+  // directory, and Node's mkdir has no idea what `~` means: it tried to make a
+  // folder actually named "~", which fails as
+  //   ENOENT: no such file or directory, mkdir '~/HarnessAgents'
+  // and left the wizard wedged on its last step with no way forward. Expand BEFORE
+  // the value is persisted or copied into recentHives, so every downstream reader
+  // (mkdir, the hive root, the launch picker) sees one absolute path.
   if (typeof patch.harnessHome === 'string' && patch.harnessHome) {
-    const prior = current.recentHives ?? [];
-    next.recentHives = [patch.harnessHome, ...prior.filter((h) => h !== patch.harnessHome)].slice(0, 8);
+    const { home, recentHives } = normalizeHiveHome(patch.harnessHome, current.recentHives ?? []);
+    next.harnessHome = home;
+    next.recentHives = recentHives;
   }
   return persistConfig(next);
 }
@@ -674,7 +682,15 @@ export function commandForAutoMode(
 /** Ensure harnessHome exists on disk. */
 export function ensureHarnessHome(path: string): { ok: boolean; error?: string } {
   try {
-    mkdirSync(path, { recursive: true });
+    // Expand HERE too, not only at the config write (#140). This runs FIRST —
+    // onboarding calls it before updateConfig — so normalizing only at the write
+    // boundary left the actual mkdir still receiving a literal `~`. Depending on
+    // the process cwd that either fails outright or, worse, quietly succeeds by
+    // creating a directory genuinely named "~" somewhere nobody will look, and
+    // the hive then lives at a path the user cannot find. This is the
+    // "defense-in-depth at the consumers" the expandTilde doc calls for: the
+    // ingestion point normalizes, and the consumer refuses to trust that it did.
+    mkdirSync(expandTilde(path), { recursive: true });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

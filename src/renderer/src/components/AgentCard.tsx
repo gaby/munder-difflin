@@ -57,8 +57,25 @@ export function AgentCard({
 }: AgentCardProps) {
   const [hover, setHover] = useState(false);
   const typing = useHasTerminalDraft(ptyId);
-  // The god is always framed (stands out from the row); others only when selected.
-  const framed = isGod || selected;
+  // IDENTITY and SELECTION are two different things, and conflating them is why
+  // selecting Michael appeared to do nothing.
+  //
+  // The card used to pass `isGod || selected` into PixelPanel's 'active' variant,
+  // whose frame is `inset 1px + 3px accent + 5px ink` — five pixels of border in
+  // the agent's OWN accent. Three problems in one: the selection cue changed
+  // colour per agent (the "blue halo" on a sky agent), it was invisible on god
+  // because god was framed unconditionally, and stacking the selection ring
+  // outside it made the boss card visibly fatter than its neighbours.
+  //
+  // Now: god is marked by its SURFACE (see godSurface), everyone shares the same
+  // 1px panel border, and selection is one accent-independent ring — identical on
+  // every card, god included.
+
+  // The selected card wears an ink ring OUTSIDE its border. ink-900 rather than
+  // an accent so the cue is identical on every agent, and it flips with the
+  // theme (near-black on cream, near-white on the dark ground), staying legible
+  // over whatever accent the card already carries.
+  const selectionRing = selected ? '0 0 0 2px var(--cth-ink-900)' : '';
 
   // Context gauge as ONE clean fill (0..8 → 0..100%). Colour escalates as the
   // window fills: accent while comfortable, amber from 6/8, coral from 7/8.
@@ -70,12 +87,37 @@ export function AgentCard({
     ? `Context: ${fmtK(contextTokens)} / ${fmtK(contextLimit)} tokens (${Math.round((contextTokens / contextLimit) * 100)}%)`
     : 'Context gauge — fills once the agent reports activity';
 
-  const width = isGod ? 216 : 196;
-  const height = isGod ? 86 : 76;
-  const lift = (isGod ? -2 : 0) - (hover ? 1 : 0);
+  // ONE card size for every agent. God used to be 216x86 against everyone
+  // else's 196x76, so the dock never lined up — and once the selection ring was
+  // added outside its 5px accent frame, the boss card grew a visibly thicker
+  // edge than any other. Distinction now comes from the card's SURFACE, not from
+  // making its box bigger or its border heavier.
+  // 196 was too tight once god's row carried NAME + BOSS + status: the name
+  // truncated to "MIC…" — the one word on the card that must never be the thing
+  // that gets cut. Widened for every card so the dock stays uniform, with enough
+  // slack that Talk's info mark (which only appears when the OpenAI key is
+  // missing) has somewhere to sit rather than pushing the row apart.
+  const width = 220;
+  const height = 78;
+  const lift = (isGod ? -2 : 0) - (hover ? 1 : 0) - (selected ? 1 : 0);
+  /** God's distinction: a tinted surface plus a thin accent border all the way
+   *  around — NOT the 3px rule that used to sit on the top edge alone. That rule
+   *  read as a stray yellow bar rather than as part of the card, and an edge
+   *  treatment that only exists on one side always looks like a mistake or a
+   *  progress bar. Same 1px geometry as every other card, so the box is
+   *  unchanged and the selection ring still means exactly one thing everywhere. */
+  const godSurface: React.CSSProperties = isGod
+    ? {
+        background: `var(--cth-${accent}-light)`,
+        boxShadow: `inset 0 0 0 1px var(--cth-${accent})`
+      }
+    : {};
   const dropShadow = isGod
     ? `2px 3px 0 0 rgba(26,19,32,${hover ? 0.2 : 0.14})`
     : (hover ? '1px 2px 0 0 rgba(26,19,32,0.12)' : 'none');
+  // Ring first so it sits tight to the card, then the existing drop shadow.
+  const outerShadow = [selectionRing, dropShadow === 'none' ? '' : dropShadow]
+    .filter(Boolean).join(', ') || 'none';
 
   // One context line: what it's DOING while working, WHERE it lives while idle.
   const infoLine = (status !== 'idle' && action) ? action : project;
@@ -87,13 +129,16 @@ export function AgentCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       draggable={draggable}
+      // The ring is the visual answer to "which terminal is open"; this is the
+      // same answer for a screen reader. Matches SidebarRow in fullscreen.
+      aria-current={selected ? 'true' : undefined}
       className="cth-titlebar-nodrag"
       style={{
         width, minWidth: width, height,
         padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
         position: 'relative',
         transform: lift ? `translateY(${lift}px)` : 'none',
-        boxShadow: dropShadow,
+        boxShadow: outerShadow,
         transition: 'transform 90ms steps(2, end), box-shadow 90ms steps(2, end)'
       }}
     >
@@ -118,17 +163,19 @@ export function AgentCard({
         </span>
       )}
       <PixelPanel
-        variant={framed ? 'active' : 'default'}
-        accent={framed ? accent : undefined}
-        style={{ height: '100%', padding: '6px 8px' }}
+        variant="default"
+        style={{ height: '100%', padding: '6px 8px', ...godSurface }}
         noPadding
       >
         <div style={{ display: 'flex', gap: 8, height: '100%' }}>
           {/* Portrait tile — vertically centred so the card reads calm and even. */}
           <div style={{
             width: 36, height: isGod ? 50 : 46, alignSelf: 'center',
-            background: `var(--cth-${accent}-light)`,
-            boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
+            // God's CARD is now accent-light, so the tile cannot be — it would
+            // vanish into its own background. Paper reads as an inset frame
+            // against the tint, which is what the tile is meant to look like.
+            background: isGod ? 'var(--cth-paper-100)' : `var(--cth-${accent}-light)`,
+            boxShadow: `inset 0 0 0 1px var(--cth-ink-${isGod ? '300' : '100'})`,
             // Anchor the sprite's TOP: the 56px-tall portrait overflows this
             // tile, and bottom-anchoring cropped the head — crop feet, not face.
             display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'hidden',
@@ -146,6 +193,7 @@ export function AgentCard({
                   fontSize: 'var(--cth-text-display-sm)',
                   lineHeight: 'var(--cth-lh-display-sm)',
                   color: 'var(--cth-ink-900)',
+                  flex: 1, minWidth: 0,
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}>{name.toUpperCase()}</span>
                 {isGod && (
@@ -156,7 +204,11 @@ export function AgentCard({
                   }}>BOSS</span>
                 )}
               </span>
-              <PixelBadge status={typing ? 'typing' : status} />
+              {/* flexShrink:0 — the badge is a fixed 2-to-5 character chip; when
+                  it was allowed to shrink, the browser resolved the overflow by
+                  eating the NAME instead. Truncation should land on the longest,
+                  most redundant thing, not on the identity. */}
+              <PixelBadge status={typing ? 'typing' : status} style={{ flexShrink: 0 }} />
             </div>
 
             {/* Context line: action while working, repo while idle. */}
@@ -172,8 +224,16 @@ export function AgentCard({
             {/* God: voice on its own compact row. Workers: the private note row.
                 Both sit ABOVE the gauge, so it is never covered. */}
             {isGod ? (
+              // Talk grows an info mark when the OpenAI key is missing, so this
+              // row can hold three things instead of two. `overflow: hidden` is
+              // the guard: the toggle's label shrinks first (it has minWidth:0),
+              // and if it still does not fit, the row clips INSIDE the card
+              // instead of spilling over its border.
               <div
-                style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  minWidth: 0, overflow: 'hidden'
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
                 <RealtimeMichaelToggle />

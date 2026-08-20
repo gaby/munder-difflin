@@ -43,7 +43,10 @@ export function TaskDetailOverlay() {
   const move = async (status: HiveTask['status']) => {
     const next = tasks.map((t) => (t.id === task.id ? { ...t, status } : t));
     setTasks(next); // optimistic
-    try { await window.cth.hiveWriteTasks(next); } catch { void refresh(); }
+    try {
+      const result = await window.cth.hivePatchTask(task.id, { status });
+      if (!result.ok) void refresh();
+    } catch { void refresh(); }
   };
 
   const assign = () => {

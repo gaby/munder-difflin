@@ -73,7 +73,7 @@ test('model picker options stay provider-specific', () => {
   );
   assert.deepEqual(
     modelsForProvider('grok').map((model) => model.id),
-    [undefined, 'grok-4.5']
+    [undefined, 'grok-4.6', 'grok-4.5']
   );
   assert.deepEqual(
     modelsForProvider('kimi').map((model) => model.id),

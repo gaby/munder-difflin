@@ -168,6 +168,49 @@ export function OfficeFloor() {
   // tears down and rebuilds the whole scene on the new map/cast (see deps below).
   const officeTheme = useStore((s) => s.officeTheme);
 
+  // Is the floor actually on screen? A fullscreen terminal or file editor covers
+  // it completely, and a hidden window shows nothing at all — but the Pixi ticker
+  // went on running the whole scene regardless: every character, thought cloud,
+  // coffee run and envelope animating, and the renderer drawing every frame, into
+  // pixels nobody can see. On a floor of twenty agents that is the app's single
+  // largest continuous cost, and users who live in the fullscreen terminal (the
+  // normal way to work with one agent) paid it 100% of the time.
+  //
+  // Stop the ticker instead of unmounting: the WebGL context, textures and the
+  // whole scene graph stay alive, so coming back out of fullscreen is instant
+  // rather than a full theme reload.
+  //
+  // A paused floor resumes where it left off. Two things make that true, and it is
+  // worth being precise because the obvious claim — "nothing here reads wall-clock
+  // time" — is FALSE: Date.now() is read for the aura/coffee timers and for the
+  // busy/cheer thresholds. The first sits inside onTick, so a stopped ticker freezes
+  // it along with everything else. The second runs in applyState, a store
+  // subscription that keeps firing while paused — but it only mutates sprite state
+  // that is redrawn on resume, so the worst case is a cosmetic cheer reflecting
+  // genuinely-elapsed busy time, invisible while hidden anyway.
+  //
+  // The frame delta is safe by construction: Pixi clamps elapsedMS to minFPS on
+  // start(), so a floor paused for an hour advances a few frames on resume rather
+  // than teleporting every character across the map.
+  const fullscreenAgentId = useStore((s) => s.fullscreenAgentId);
+  const fullscreenFilePath = useStore((s) => s.fullscreenFilePath);
+  const [docHidden, setDocHidden] = useState(() => document.hidden);
+  useEffect(() => {
+    const onVis = () => setDocHidden(document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+  const paused = !!fullscreenAgentId || !!fullscreenFilePath || docHidden;
+  // Read inside init(), which finishes asynchronously and would otherwise start a
+  // ticker the effect below had already been asked to stop.
+  const pausedRef = useRef(paused);
+  useEffect(() => {
+    pausedRef.current = paused;
+    const ticker = appRef.current?.ticker;
+    if (!ticker) return; // app.init() hasn't created it yet — init() applies it
+    if (paused) ticker.stop(); else ticker.start();
+  }, [paused]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -1653,6 +1696,9 @@ export function OfficeFloor() {
         }
       };
       app.ticker.add(onTick);
+      // init() is async: the floor may already be behind a fullscreen terminal by
+      // the time we get here, and app.init() starts the ticker itself.
+      if (pausedRef.current) app.ticker.stop();
 
       const resize = new ResizeObserver((entries) => {
         for (const e of entries) {

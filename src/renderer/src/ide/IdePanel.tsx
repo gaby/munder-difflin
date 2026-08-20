@@ -1,11 +1,14 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from '@/store/store';
+import { useStore, type Agent } from '@/store/store';
 import { FileTree } from '@/components/FileTree';
 import { Icon } from '@/components/Icon';
 import { MonacoEditor } from './MonacoEditor';
 import { MonacoDiff } from './MonacoDiff';
+import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import { HistoryPane, ComparePane } from './GitPanes';
+import { isImagePath, isSvgPath } from '@shared/imageTypes';
+import { ideBarStyle, ideIconBtn as iconBtn, ideTextBtn as textBtn } from './chrome';
 
 // v0.3.4 markdown preview: per-md-tab view mode, defaulted from the last choice.
 type MdView = 'code' | 'split' | 'preview';
@@ -26,7 +29,7 @@ const GIT_RAIL_COLLAPSED_KEY = 'cth.ide.gitRailCollapsed';
 interface GitStatusEntry { path: string; index: string; worktree: string }
 interface GitStatusT { staged: GitStatusEntry[]; unstaged: GitStatusEntry[]; untracked: string[] }
 
-type TabMode = 'edit' | 'diff' | 'revdiff';
+type TabMode = 'edit' | 'diff' | 'revdiff' | 'image';
 interface Tab {
   key: string; rel: string; mode: TabMode;
   /** revdiff only: the two sides + a short human label ("a1b2c3d" / "main…feat"). */
@@ -59,18 +62,40 @@ function statusColor(code: string): string {
   return 'var(--cth-ink-500)';
 }
 
-/** Snapshot the workspace root once at mount: the selected agent's cwd, else the
- *  god agent's cwd, else the first agent's. The IDE is a full-window overlay, so
- *  the user can't switch agents while it's open — a stable root is correct. */
-function pickRoot(): string | null {
+/** Which agent's workspace the IDE is showing, and how confidently we know it. */
+interface IdeTarget {
+  agent: Agent | null;
+  root: string | null;
+  /** True when NOBODY told us which agent this is and we had to guess. The
+   *  guess is usually right, but the title says so rather than asserting a name
+   *  it cannot stand behind. */
+  inferred: boolean;
+}
+
+/** Snapshot the IDE's target once at mount. The IDE is a full-window overlay, so
+ *  the user can't switch agents while it's open — a stable target is correct.
+ *
+ *  Preference order, most-trustworthy first:
+ *   1. `ideAgentId` — the opener said exactly who this is for.
+ *   2. the current selection — right for anything opened off the sidebar.
+ *   3. the god agent, then the first agent — last resorts so the IDE still
+ *      opens on *something* browsable instead of an empty shell.
+ *  Everything past (1) is marked `inferred`, because those paths are exactly the
+ *  ones that can disagree with what the user was actually looking at. */
+function pickIdeTarget(): IdeTarget {
   const s = useStore.getState();
-  const sel = s.selectedId ? s.agents.find((a) => a.id === s.selectedId) : null;
-  return sel?.cwd ?? s.agents.find((a) => a.isGod)?.cwd ?? s.agents[0]?.cwd ?? null;
+  const byId = (id: string | null): Agent | null => (id ? s.agents.find((a) => a.id === id) ?? null : null);
+  const named = byId(s.ideAgentId);
+  if (named?.cwd) return { agent: named, root: named.cwd, inferred: false };
+  const guess = byId(s.selectedId) ?? s.agents.find((a) => a.isGod) ?? s.agents[0] ?? null;
+  if (guess?.cwd) return { agent: guess, root: guess.cwd, inferred: true };
+  return { agent: null, root: null, inferred: false };
 }
 
 export function IdePanel() {
   const setIdeOpen = useStore((s) => s.setIdeOpen);
-  const [root] = useState<string | null>(pickRoot);
+  const [target] = useState<IdeTarget>(pickIdeTarget);
+  const root = target.root;
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -162,7 +187,19 @@ export function IdePanel() {
     setActiveKey(key);
   }, []);
 
-  const openEdit = useCallback((rel: string) => { ensureEdit(rel); openTab('edit', rel); }, [ensureEdit, openTab]);
+  /** Force a file into Monaco regardless of type — the "view source" escape
+   *  hatch behind the image preview. */
+  const openSource = useCallback((rel: string) => { ensureEdit(rel); openTab('edit', rel); }, [ensureEdit, openTab]);
+
+  /** The default open. Images go to the preview instead of Monaco: routing them
+   *  through `ensureEdit` is what produced the old "binary file (not
+   *  displayable)" tab, since the text reader rejects anything with a null byte.
+   *  SVG has no null bytes and so used to open as unhighlighted plaintext — it
+   *  is a picture first here too, with `view source` one click away. */
+  const openEdit = useCallback((rel: string) => {
+    if (isImagePath(rel)) { openTab('image', rel); return; }
+    openSource(rel);
+  }, [openSource, openTab]);
 
   // v0.3.4: rev-pinned diff tabs (per-commit files + branch compare). Both
   // sides load through the metadata-guarded git:showFile IPC at the MAIN root.
@@ -204,10 +241,11 @@ export function IdePanel() {
     const prefix = root.endsWith('/') ? root : `${root}/`;
     if (!abs.startsWith(prefix)) return; // different workspace — tree still lets them browse
     const rel = abs.slice(prefix.length);
-    ensureEdit(rel);
-    openTab('edit', rel);
+    // Same routing as a tree click — an "open in IDE" on a screenshot must land
+    // on the preview, not on a tab that refuses to display it.
+    openEdit(rel);
     if (isMarkdown(rel)) setMdViews((p) => ({ ...p, [rel]: 'preview' }));
-  }, [root, ensureEdit, openTab]);
+  }, [root, openEdit]);
   const openDiff = useCallback((rel: string) => { ensureDiff(rel, true); openTab('diff', rel); }, [ensureDiff, openTab]);
 
   const closeTab = useCallback((key: string) => {
@@ -303,7 +341,11 @@ export function IdePanel() {
     if (root) navigator.clipboard.writeText(rel ? `${root}/${rel}` : root).catch(() => { /* noop */ });
   };
 
-  const activeEditRel = activeTab?.mode === 'edit' ? activeTab.rel : undefined;
+  // Image tabs highlight in the tree too — the tree's job is "what am I looking
+  // at", and an image is as much "open" as a text file is.
+  const activeEditRel = activeTab && (activeTab.mode === 'edit' || activeTab.mode === 'image')
+    ? activeTab.rel
+    : undefined;
 
   return (
     <div style={{
@@ -329,9 +371,46 @@ export function IdePanel() {
         }}>
           MUNDER DIFFLIN · IDE
         </span>
+        {/* WHOSE workspace this is. The folder name alone was ambiguous the
+            moment two agents shared a repo (worktrees named for the branch, not
+            the agent) or an agent worked in a generically-named directory —
+            "src" tells you nothing about which of eight agents you are editing
+            under. Name first, directory second: the name is the identity, the
+            path is the detail. */}
+        {target.agent ? (
+          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+            <span
+              title={target.inferred
+                ? `No agent was named when the IDE opened — showing ${target.agent.name}'s workspace (the current selection)`
+                : `${target.agent.name}'s workspace`}
+              style={{
+                fontFamily: 'var(--cth-font-ui)', fontSize: 13, fontWeight: 600,
+                color: 'var(--cth-ink-900)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '22vw'
+              }}
+            >{target.agent.name}</span>
+            {target.agent.isGod && (
+              <span style={{
+                fontFamily: 'var(--cth-font-display)', fontSize: 7, padding: '1px 3px',
+                background: 'var(--cth-lilac-light)', color: 'var(--cth-ink-900)'
+              }}>god</span>
+            )}
+            {target.inferred && (
+              // Never assert a name we had to guess at. One quiet word is enough
+              // to stop someone trusting the wrong agent's directory.
+              <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+                (assumed)
+              </span>
+            )}
+          </span>
+        ) : (
+          <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, color: 'var(--cth-ink-500)' }}>
+            no agent
+          </span>
+        )}
         <span title={root ?? ''} style={{
           fontFamily: 'var(--cth-font-mono)', fontSize: 13, color: 'var(--cth-ink-500)',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '40vw'
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '30vw'
         }}>
           {root ? basename(root) : 'no workspace'}
         </span>
@@ -497,9 +576,11 @@ export function IdePanel() {
                     {t.mode !== 'edit' && (
                       <span style={{
                         fontFamily: 'var(--cth-font-display)', fontSize: 7, padding: '1px 3px',
-                        background: t.mode === 'revdiff' ? 'var(--cth-lilac-light)' : 'var(--cth-sky-light)',
+                        background: t.mode === 'revdiff' ? 'var(--cth-lilac-light)'
+                          : t.mode === 'image' ? 'var(--cth-peach-light)'
+                          : 'var(--cth-sky-light)',
                         color: 'var(--cth-ink-900)'
-                      }}>{t.mode === 'revdiff' ? (t.revLabel ?? 'REV') : 'DIFF'}</span>
+                      }}>{t.mode === 'revdiff' ? (t.revLabel ?? 'REV') : t.mode === 'image' ? 'IMG' : 'DIFF'}</span>
                     )}
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {basename(t.rel)}{dirty ? ' •' : ''}
@@ -531,7 +612,20 @@ export function IdePanel() {
                   <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13 }}>
                     Pick a file from the tree to edit, or a changed file to diff.
                   </div>
+                  <ShortcutHint />
                 </div>
+              )}
+
+              {activeTab?.mode === 'image' && root && (
+                <ImagePreview
+                  // Keyed by path so switching image tabs tears the previous
+                  // preview down — that unmount is what revokes its blob URL.
+                  key={activeTab.key}
+                  root={root}
+                  rel={activeTab.rel}
+                  onCopyPath={() => copyAbs(activeTab.rel)}
+                  onViewSource={isSvgPath(activeTab.rel) ? () => openSource(activeTab.rel) : undefined}
+                />
               )}
 
               {activeTab?.mode === 'edit' && (() => {
@@ -550,6 +644,8 @@ export function IdePanel() {
                       onCopy={() => copyAbs(activeTab.rel)}
                       mdView={md ? view : undefined}
                       onMdView={md ? (v) => setMdView(activeTab.rel, v) : undefined}
+                      // The return leg of the SVG round trip: source ⇄ picture.
+                      onViewImage={isImagePath(activeTab.rel) ? () => openTab('image', activeTab.rel) : undefined}
                     />
                     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
                       {view !== 'preview' && (
@@ -565,12 +661,12 @@ export function IdePanel() {
                       {md && view !== 'code' && (
                         <MdPane
                           rel={activeTab.rel}
+                          root={root}
                           source={buf.content}
                           split={view === 'split'}
-                          onOpenMarkdownLink={(target) => {
-                            ensureEdit(target);
-                            openTab('edit', target);
-                            setMdViews((p) => ({ ...p, [target]: 'preview' }));
+                          onOpenMarkdownLink={(link) => {
+                            openSource(link);
+                            setMdViews((p) => ({ ...p, [link]: 'preview' }));
                           }}
                         />
                       )}
@@ -656,17 +752,15 @@ function SectionHeader({ title, right }: { title: string; right?: React.ReactNod
   );
 }
 
-function EditorBar({ rel, dirty, saveState, onSave, onCopy, mdView, onMdView }: {
+function EditorBar({ rel, dirty, saveState, onSave, onCopy, mdView, onMdView, onViewImage }: {
   rel: string; dirty: boolean; saveState: EditBuffer['saveState']; onSave: () => void; onCopy: () => void;
   /** Set only for markdown files — renders the code|split|preview switch. */
   mdView?: MdView; onMdView?: (v: MdView) => void;
+  /** Set only for files that are ALSO images (SVG) — jumps back to the picture. */
+  onViewImage?: () => void;
 }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px',
-      background: 'var(--cth-cream-200)', borderBottom: '1px solid var(--cth-ink-700)',
-      fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)'
-    }}>
+    <div style={ideBarStyle}>
       <Icon name="code" />
       <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--cth-font-mono)' }} title={rel}>
         {rel}{dirty ? ' •' : ''}
@@ -687,6 +781,9 @@ function EditorBar({ rel, dirty, saveState, onSave, onCopy, mdView, onMdView }: 
           ))}
         </span>
       )}
+      {onViewImage && (
+        <button onClick={onViewImage} title="Show this file as an image" style={textBtn}>view image</button>
+      )}
       <button onClick={onCopy} title="Copy absolute path" style={textBtn}>copy path</button>
       <button onClick={onSave} disabled={!dirty || saveState === 'saving'} title="Save (Cmd/Ctrl+S)"
         style={{ ...textBtn, opacity: dirty ? 1 : 0.5 }}>
@@ -699,8 +796,8 @@ function EditorBar({ rel, dirty, saveState, onSave, onCopy, mdView, onMdView }: 
 /** Markdown preview pane — renders the LIVE edit buffer (deferred so fast typing
  *  never blocks the editor). In split view it takes the right half behind a
  *  hairline divider; in preview view it fills the body. */
-function MdPane({ rel, source, split, onOpenMarkdownLink }: {
-  rel: string; source: string; split: boolean; onOpenMarkdownLink: (rel: string) => void;
+function MdPane({ rel, root, source, split, onOpenMarkdownLink }: {
+  rel: string; root: string; source: string; split: boolean; onOpenMarkdownLink: (rel: string) => void;
 }) {
   const deferred = useDeferredValue(source);
   return (
@@ -709,10 +806,63 @@ function MdPane({ rel, source, split, onOpenMarkdownLink }: {
       background: 'var(--cth-paper-100)',
       borderLeft: split ? '1px solid var(--cth-ink-100)' : 'none'
     }}>
-      <MarkdownPreview source={deferred} baseRel={rel} onOpenMarkdownLink={onOpenMarkdownLink} />
+      {/* `root` is what lets a report's screenshots render inline instead of
+          collapsing to placeholder chips. */}
+      <MarkdownPreview source={deferred} baseRel={rel} root={root} onOpenMarkdownLink={onOpenMarkdownLink} />
     </div>
   );
 }
+
+/**
+ * The IDE's empty state doubles as the only place these capabilities are
+ * advertised.
+ *
+ * Monaco ships find/replace, a command palette and go-to-line/symbol, all of
+ * which have worked here since the editor landed — and essentially nobody knew,
+ * because the panel never mentioned them and there is no menu bar to discover
+ * them from. People asked for "search in the IDE" while ⌘F was already bound.
+ * (Repo-wide search is genuinely absent; this hint deliberately promises only
+ * what exists.)
+ *
+ * Kept as a muted list under the empty state rather than a banner: it is the one
+ * moment the pane has nothing to say, and it must not compete with an open file.
+ */
+function ShortcutHint() {
+  return (
+    <div style={{
+      marginTop: 10, display: 'grid', gap: 2, justifyItems: 'center',
+      fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-300)'
+    }}>
+      {EDITOR_SHORTCUTS.map(([keys, label]) => (
+        <div key={label} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+          <span style={{ fontFamily: 'var(--cth-font-mono)', color: 'var(--cth-ink-500)' }}>{keys}</span>
+          <span>{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Electron reports the host platform in the UA; there is no platform helper in
+ *  the renderer, and printing ⌘ to a Linux user would be worse than useless. */
+const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
+
+/** Monaco's own default bindings — do not invent entries here. */
+const EDITOR_SHORTCUTS: ReadonlyArray<readonly [string, string]> = IS_MAC
+  ? [
+      ['⌘F', 'find in file'],
+      ['⌥⌘F', 'replace'],
+      ['F1', 'command palette'],
+      ['⌃G', 'go to line'],
+      ['⇧⌘O', 'go to symbol']
+    ]
+  : [
+      ['Ctrl+F', 'find in file'],
+      ['Ctrl+H', 'replace'],
+      ['F1', 'command palette'],
+      ['Ctrl+G', 'go to line'],
+      ['Ctrl+Shift+O', 'go to symbol']
+    ];
 
 function Centered({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
   return (
@@ -723,15 +873,3 @@ function Centered({ children, tone }: { children: React.ReactNode; tone?: 'error
     }}>{children}</div>
   );
 }
-
-const iconBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  padding: 0, width: 18, height: 18, background: 'transparent', border: 'none',
-  cursor: 'pointer', color: 'var(--cth-ink-500)'
-};
-const textBtn: React.CSSProperties = {
-  padding: '0 6px', height: 20, fontFamily: 'var(--cth-font-ui)', fontSize: 12,
-  color: 'var(--cth-ink-900)', background: 'var(--cth-cream-100)', border: 'none',
-  boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', cursor: 'pointer',
-  display: 'inline-flex', alignItems: 'center', gap: 4
-};

@@ -75,32 +75,37 @@ const lightTheme = {
   brightWhite:  '#1A1320'
 };
 
-// Dark theme — v0.3.4: matches the app's dark surface ramp (tokens.css
-// data-cth-theme='dark'). Muted-professional ANSI set: recognizable hues, no
+// Dark theme — mirrors the app's dark surface ramp (tokens.css
+// data-cth-theme='dark'). xterm takes literal colours and cannot read CSS
+// custom properties, so these values are RE-STATED rather than referenced, and
+// drift the moment the tokens move: this set was still on the pre-readability
+// ramp (background #1D1C21, the old paper-100) after tokens.css dropped to
+// a softer ground, which would have left every terminal sitting a visible step
+// apart from the panel holding it. Muted-professional ANSI: recognizable hues, no
 // fluorescing on the dark ground; brights are one legible step up, not pastels.
 const darkTheme = {
-  background: '#1D1C21',
-  foreground: '#E8E6E3',
-  cursor: '#DF8078',
-  cursorAccent: '#1D1C21',
-  selectionBackground: '#37363E',
-  selectionForeground: '#E8E6E3',
-  black:        '#26252C',
-  red:          '#DF8078',
-  green:        '#6FB88B',
-  yellow:       '#D8B052',
-  blue:         '#64ACBB',
-  magenta:      '#A493E0',
-  cyan:         '#64ACBB',
-  white:        '#E8E6E3',
-  brightBlack:  '#8F8C90',
+  background: '#1A1A1F',        // = --cth-paper-100
+  foreground: '#DEDBD6',        // = --cth-ink-900
+  cursor: '#E08C82',
+  cursorAccent: '#1A1A1F',
+  selectionBackground: '#37363F',
+  selectionForeground: '#DEDBD6',
+  black:        '#222229',
+  red:          '#E08C82',
+  green:        '#74C096',
+  yellow:       '#CFAA57',
+  blue:         '#6FB3C4',
+  magenta:      '#A896E3',
+  cyan:         '#6FB3C4',
+  white:        '#DEDBD6',
+  brightBlack:  '#96919F',
   brightRed:    '#EBA39C',
   brightGreen:  '#96CDA9',
   brightYellow: '#E5C87E',
   brightBlue:   '#8FC5D1',
   brightMagenta:'#C0B3EB',
   brightCyan:   '#8FC5D1',
-  brightWhite:  '#F5F4F2'
+  brightWhite:  '#EFEDE9'
 };
 
 const THEMES: Record<PtyTheme, typeof lightTheme> = { light: lightTheme, dark: darkTheme };

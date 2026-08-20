@@ -15,7 +15,7 @@ import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
  * tasks stuck waiting on this one — so "why isn't X done?" reads as "ah,
  * because I still owe something here."
  *
- * Sending an answer does two things atomically-ish:
+ * Sending an answer does two things:
  *   1. writes it into the card's humanQA entry in hive/tasks.json (the
  *      decision is documented ON the task, forever), and
  *   2. mails the god so it picks the answer up, unblocks the card, and the
@@ -82,7 +82,11 @@ export function AskMeTab() {
         );
         return { ...t, humanQA: qa };
       });
-      await window.cth.hiveWriteTasks(next);
+      const updated = next.find((candidate) => candidate.id === task.id);
+      const result = updated
+        ? await window.cth.hivePatchTask(task.id, { humanQA: updated.humanQA })
+        : { ok: false };
+      if (!result.ok) throw new Error('task changed before answer could be saved');
       setTasks(next);
       // 2) Tell the god, so the card gets unblocked and work continues.
       await window.cth.hiveSend({
@@ -106,7 +110,6 @@ export function AskMeTab() {
   // stops returning it and the card leaves this view — the question itself stays
   // on the card, so the Q&A history is never dropped (protocol). The task stays
   // blocked on the kanban; the god can re-ask by appending a fresh humanQA entry.
-  // Reuses hiveWriteTasks (same path as the answer flow) — no new IPC.
   const dismiss = async (task: HiveTask) => {
     const open = openQuestion(task);
     if (!open || sending === task.id) return;
@@ -121,7 +124,11 @@ export function AskMeTab() {
     });
     setTasks(next); // optimistic — the card disappears immediately
     try {
-      await window.cth.hiveWriteTasks(next);
+      const updated = next.find((candidate) => candidate.id === task.id);
+      const result = updated
+        ? await window.cth.hivePatchTask(task.id, { humanQA: updated.humanQA })
+        : { ok: false };
+      if (!result.ok) throw new Error('task changed before ask could be dismissed');
     } catch {
       setTasks(tasks); // restore on failure so the user can retry
     }
