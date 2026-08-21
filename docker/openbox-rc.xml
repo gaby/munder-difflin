@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal openbox config for the container.
+
+  Two reasons this file exists rather than relying on openbox's defaults:
+    1. Pointing openbox at a config file stops it hunting for Debian's
+       /var/lib/openbox/debian-menu.xml (which the slim image doesn't ship) and
+       warning on every start.
+    2. The app otherwise opens at its own default size inside a larger Xvfb
+       screen, leaving dead space around it in the noVNC tab. Maximizing means
+       the floor fills whatever SCREEN_GEOMETRY is set to.
+
+  Everything not named here keeps openbox's built-in defaults, which is what
+  gives the window its title bar and resize handles.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <applications>
+    <application class="*">
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>

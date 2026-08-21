@@ -1,0 +1,38 @@
+# Keep the build context small — everything below is either rebuilt inside the
+# image, irrelevant to it, or must never end up in a layer.
+.git
+.github
+.worktrees
+node_modules
+out
+dist
+build/AuthKey_*.p8
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+.env
+.env.*
+*.log
+.DS_Store
+.vite
+.gstack
+
+# Site, media and prose: none of it is needed to run the app. `docs/` itself
+# stays — the renderer's `@brand` alias points at it and imports docs/logo.png —
+# but its heavy subtrees don't. (CHANGELOG.md is copied explicitly: the voice
+# get_app_info tool reads it.)
+blog
+docs/blog
+docs/media
+docs/hires
+docs/r
+docs/research
+docs/screenshots
+landing-remotion
+prototypes
+seo
+test
+workspace
+*.md
+!CHANGELOG.md

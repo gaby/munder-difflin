@@ -26,5 +26,7 @@ docs/media/*.mov
 # raw demo screen recordings — only the compressed docs/media/demo/*.mp4 are deployed
 docs/media/MunderDifflin*.mp4
 
+# docker-compose bind mount for agent working copies
+/workspace/
 # blog theme previews (local only)
 docs/blog-preview-*/

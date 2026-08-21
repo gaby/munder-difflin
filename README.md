@@ -192,6 +192,102 @@ npm run dev        # launches the Electron app with hot reload
 On first launch you'll go through the onboarding wizard, then land on the floor. Use **Add agent** to
 spawn your first session — the GOD agent seats itself in Michael's office automatically.
 
+### Run it in Docker
+
+Munder Difflin is a desktop app, so the image ships the desktop with it: a virtual X display
+(Xvfb), a window manager, and [noVNC](https://novnc.com/) serving a browser client over VNC. You
+watch the floor in a browser tab instead of a native window — everything else (PTYs, the hive, the
+IDE) behaves normally.
+
+```bash
+git clone https://github.com/chaitanyagiri/munder-difflin.git
+cd munder-difflin
+mkdir -p workspace                 # your code goes here; agents see it as /workspace
+                                   # (on uid != 1000, see the ownership note below)
+docker compose up --build          # first build takes a while — it rebuilds node-pty + better-sqlite3
+```
+
+Then open **<http://localhost:6080>** and you're on the floor. A native VNC client
+(`vnc://localhost:5900`) works too, and is smoother than the browser for long sessions.
+
+- **Your code** — `./workspace` is mounted at `/workspace`; point new agents at a folder under it.
+  Create it yourself rather than letting Docker make it root-owned. The container runs as **uid
+  1000**, so if `id -u` says you're someone else (common on secondary or centrally-managed
+  accounts) agents can read the directory but not write to it — hand it over once:
+  ```bash
+  mkdir -p workspace && sudo chown -R 1000:1000 workspace
+  ```
+- **What persists** — the `munder-home` volume holds app config, the hive, agent CLI logins, and
+  any CLI the app installs for itself. `docker compose down` keeps it; `down -v` wipes it.
+- **Agent CLIs** — `claude` is baked into the image, along with `git`, `gh` and `glab` for the
+  agents (and the GitHub/GitLab panels) to shell out to. **Codex, OpenCode, Crush, pi.dev and
+  GitHub Copilot** self-heal on first spawn — the harness runs the installer in the terminal, and
+  the image puts that install prefix on the login-shell PATH so the new binary resolves. **Grok,
+  Kimi, Antigravity and Qwen carry no installer** (`agentProvider.ts` defines none), so the
+  terminal prints a manual hint and nothing launches — install those yourself inside the container,
+  or add them with `--build-arg AGENT_CLIS="…"`. `--build-arg AGENT_CLIS=""` ships none at all.
+- **API keys** — set them in your shell or a `.env` file next to `docker-compose.yml`;
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
+  `DEEPSEEK_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` (OpenCode's `google/*` models read that
+  alias rather than `GEMINI_API_KEY`) are all forwarded. Entering them in **Settings → AI Engines** does *not* work here: there's no
+  OS keyring, so `safeStorage` reports encryption unavailable and the secret broker fails closed
+  rather than writing a key it can't protect — the same thing it does on any Linux box without a
+  keyring. See "Known limits" below if you want to override that.
+- **Local model servers** — Ollama / LM Studio / vLLM on your host aren't at `localhost` from
+  inside the container; use `http://host.docker.internal:11434` (etc.), which compose wires up on
+  Linux too. The server has to bind `0.0.0.0` rather than `127.0.0.1` to be reachable.
+- **Git identity** — your host `~/.gitconfig` isn't mounted, so set `GIT_USER_NAME` /
+  `GIT_USER_EMAIL` or the first commit an agent makes fails with "Author identity unknown".
+  Anything you configure inside the container persists in the volume and is never overwritten.
+- **Window size** — change `SCREEN_GEOMETRY` (e.g. `1920x1200x24`) in `docker-compose.yml`, then
+  `docker compose up -d --force-recreate`.
+- **Timezone** — the container is UTC unless you pass one. `TZ` is forwarded from your shell, so
+  `TZ=Europe/Madrid docker compose up -d` makes the temporal skills ("today", "this week") line up
+  with your civil day.
+
+> [!WARNING]
+> Both ports are published on `127.0.0.1` and the VNC session has **no password**. Anyone who
+> reaches it drives agents with your keys — set `VNC_PASSWORD` in `docker-compose.yml` before you
+> bind either port to anything but loopback.
+
+Useful while you're in there:
+
+```bash
+docker compose logs -f             # main-process logs
+docker compose exec munder-difflin bash   # a shell next to the agents
+docker compose down                # stop, keep the volume
+```
+
+Known limits:
+
+- **Software GL.** The floor renders through SwiftShader, so it's slower than a native window.
+- **No voice.** Neither VNC nor noVNC forwards your microphone or speakers into the container, and
+  no audio device is mapped, so **Talk** / Free Flow dictation and Realtime Michael can't work here
+  even though their controls are visible.
+- **External links stay inside.** `shell.openExternal` runs `xdg-open` *in the container*, which
+  has no browser — so links to the docs, the Agent Gallery or a release page do nothing. Copy the
+  URL out and open it on your host.
+- **No in-app secret storage.** With no keyring, `safeStorage` reports encryption unavailable and
+  the secret broker fails closed by design — it never writes a secret it can't encrypt. For
+  **model-provider keys** that's covered: the environment variables above are read directly.
+  **Authenticated integrations** (the Integrations registry: GitHub, Linear, Jira, Stripe, …) are
+  not — they resolve credentials only through the encrypted store, and an enabled record with no
+  stored secret is dropped, so the broker answers `503 no_secret`. There is no environment fallback
+  and **no flag that turns this on**: `--password-store=basic` was measured to leave
+  `isEncryptionAvailable()` false too, so those integrations can't be used in the container as
+  shipped. Running a real unlocked keyring daemon inside it would be the only way.
+- **`docker compose stop` isn't graceful.** Electron catches SIGTERM but doesn't act on it, so the
+  container is SIGKILLed when the grace period expires and running agents are cut off mid-flight
+  (their PTYs die with the container). Quit from inside the app first — or accept that a stop is a
+  hard stop. Not container-specific: `kill` on a native Linux build behaves the same way.
+- **No auto-update.** Rebuild the image instead.
+- **macOS/Windows-only bits** — the dock icon, the `munderdifflin://` deep link — don't apply.
+
+For day-to-day use on your own machine the native builds on the
+[releases page](https://github.com/chaitanyagiri/munder-difflin/releases/latest) are the better
+experience — the container is for trying it out, or for parking a floor on a Linux box that runs
+24/7.
+
 ### Other scripts
 
 ```bash

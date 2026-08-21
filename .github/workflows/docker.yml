@@ -1,0 +1,156 @@
+name: Docker
+
+# Build the container image on every change that can break it. Build only —
+# nothing is published yet (see the TODO at the bottom of this file).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "docker-compose.yml"
+      - "package.json"
+      - "CHANGELOG.md"
+      - "package-lock.json"
+      - "src/**"
+      - "resources/**"
+      - "docs/*.png"
+      - "tools/**"
+      - "electron.vite.config.ts"
+      - "tsconfig*.json"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "docker-compose.yml"
+      - "package.json"
+      - "CHANGELOG.md"
+      - "package-lock.json"
+      - "src/**"
+      - "resources/**"
+      - "docs/*.png"
+      - "tools/**"
+      - "electron.vite.config.ts"
+      - "tsconfig*.json"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+
+# One build per branch/PR; a new push cancels the previous run.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    # npm ci rebuilds node-pty and better-sqlite3 against Electron's ABI, which
+    # dominates the build; the default 6h timeout is far too generous for it.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint entrypoint scripts
+        run: shellcheck docker/entrypoint.sh docker/run-app.sh
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # TODO(publish): flip to `push: true` once we decide on a registry.
+          push: false
+          load: true
+          tags: munder-difflin:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        # The app is a GUI, so "does it boot" is the wrong question for CI here.
+        # Assert instead that the pieces the container needs are present: the
+        # compiled entrypoint, the native addons rebuilt for Electron's ABI, and
+        # the virtual-display stack.
+        run: |
+          docker run --rm --entrypoint bash munder-difflin:ci -euc '
+            test -f /opt/munder-difflin/out/main/index.js
+            test -f /opt/munder-difflin/out/main/kg-core.cjs
+            test -f /opt/munder-difflin/out/main/slack-trigger.cjs
+            test -x /opt/munder-difflin/node_modules/.bin/electron
+            # Sidecars the main process resolves from the repo layout (the app
+            # runs unpackaged here, so app.isPackaged is false).
+            test -f /opt/munder-difflin/resources/kg.cjs
+            test -f /opt/munder-difflin/resources/md-slack-reply.cjs
+            # Not just the directory: .dockerignore has a *.md rule, and a bundled
+            # skill is its SKILL.md. (Docker matches *.md at the root only, so the
+            # manifests are kept — this asserts that rather than assuming it.)
+            test -f /opt/munder-difflin/resources/skills/temporal/SKILL.md
+            test -f /opt/munder-difflin/resources/skills/capabilities/SKILL.md
+            test -f /opt/munder-difflin/src/main/kg-core.cjs
+            test -f /opt/munder-difflin/CHANGELOG.md
+            # node-pty resolves its addon from build/Release or prebuilds/ — the
+            # rebuild only has to leave one of them in place.
+            find /opt/munder-difflin/node_modules/node-pty -name "*.node" | grep -q .
+            find /opt/munder-difflin/node_modules/better-sqlite3 -name "*.node" | grep -q .
+            command -v Xvfb
+            command -v gh
+            command -v glab
+            command -v dunst
+            command -v uvx
+            command -v openbox
+            command -v x11vnc
+            command -v websockify
+            test -f /etc/openbox-rc.xml
+            test -e /usr/share/novnc/index.html
+            # Debian resets PATH for non-root logins, and the app derives the PATH
+            # agents get from a login shell — so a self-installed CLI is only
+            # reachable if the npm prefix survives that reset.
+            bash -lc "printf %s \$PATH" | grep -q /home/node/.npm-global/bin
+            # End to end, the way the app actually looks a CLI up
+            # (shellEnv.ts: `$SHELL -ilc which <cli>`): a binary reachable ONLY
+            # via the profile.d PATH must resolve. Catches an unset/zsh SHELL
+            # and a lost npm prefix together.
+            test "$SHELL" = /bin/bash
+            test -d /home/node/.npm-global/bin
+            printf "#!/bin/sh\\ntrue\\n" > /home/node/.npm-global/bin/md-smoke-cli
+            chmod +x /home/node/.npm-global/bin/md-smoke-cli
+            "$SHELL" -ilc "which md-smoke-cli" | grep -q /home/node/.npm-global/bin/md-smoke-cli
+            rm -f /home/node/.npm-global/bin/md-smoke-cli
+          '
+
+  # ── TODO: publish ──────────────────────────────────────────────────────────
+  # Not wired up yet — deliberately. Before turning this on we need to agree on
+  # the registry (ghcr.io/chaitanyagiri/munder-difflin is the obvious default),
+  # the tagging policy (`latest` on main + the v* tags the release workflow
+  # already builds installers for), and whether the image is multi-arch
+  # (linux/amd64 + linux/arm64 via QEMU roughly doubles build time).
+  #
+  # When we do, the build job above needs:
+  #
+  #   permissions:
+  #     contents: read
+  #     packages: write
+  #
+  #   - uses: docker/login-action@v3
+  #     if: github.event_name != 'pull_request'
+  #     with:
+  #       registry: ghcr.io
+  #       username: ${{ github.actor }}
+  #       password: ${{ secrets.GITHUB_TOKEN }}
+  #
+  #   - id: meta
+  #     uses: docker/metadata-action@v5
+  #     with:
+  #       images: ghcr.io/${{ github.repository }}
+  #       tags: |
+  #         type=ref,event=branch
+  #         type=semver,pattern={{version}}
+  #         type=raw,value=latest,enable={{is_default_branch}}
+  #
+  # and the build step becomes `push: ${{ github.event_name != 'pull_request' }}`
+  # with `tags: ${{ steps.meta.outputs.tags }}` /
+  # `labels: ${{ steps.meta.outputs.labels }}`.

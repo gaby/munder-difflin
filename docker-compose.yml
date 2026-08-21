@@ -1,0 +1,81 @@
+# Munder Difflin in Docker — see the "Run it in Docker" section of README.md.
+#
+#   mkdir -p workspace && docker compose up --build
+#   → open http://localhost:6080
+services:
+  munder-difflin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Space-separated npm packages baked in as agent CLIs. Empty string ships
+        # none and lets the app install what you pick on first spawn.
+        AGENT_CLIS: "@anthropic-ai/claude-code"
+    image: munder-difflin:local
+    # Reap the PTYs and CLI processes agents leave behind.
+    init: true
+    # The 24/7 use case: come back after a crash, a closed window, or a host
+    # reboot, rather than leaving the floor silently stopped.
+    restart: unless-stopped
+    # Chromium wedges on Docker's default 64MB /dev/shm.
+    shm_size: "1gb"
+    ports:
+      # noVNC — the floor, in a browser tab. Loopback-only: the VNC session has
+      # no password unless you set VNC_PASSWORD below.
+      - "127.0.0.1:6080:6080"
+      # Raw VNC, for a native client (Screen Sharing, TigerVNC, …).
+      - "127.0.0.1:5900:5900"
+    environment:
+      SCREEN_GEOMETRY: "1600x1000x24"
+      # The container is UTC unless told otherwise, and the bundled temporal
+      # skills resolve "today"/"this week" against local civil days — so an
+      # unset TZ shifts those boundaries for anyone not on UTC.
+      TZ: "${TZ:-UTC}"
+      # Set this (and only then consider publishing the ports beyond localhost).
+      # VNC_PASSWORD: "change-me"
+      #
+      # Bring-your-own keys, passed through from your shell or a .env file.
+      # This is the only way to supply them here: with no OS keyring,
+      # safeStorage is unavailable and the in-app secret broker fails closed
+      # rather than storing a key it cannot encrypt (see docker/run-app.sh).
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      # OpenCode's google/* models read this alias, not GEMINI_API_KEY. The app
+      # normally synthesizes it from the encrypted store, which is unavailable
+      # here — so it has to come in on its own.
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+      #
+      # Extra Electron switches (see docker/run-app.sh). An explicit environment
+      # map means nothing reaches the container unless it is named here, so this
+      # is the only way to pass one — e.g. --disable-gpu. (Not a route to in-app
+      # secret storage: no --password-store value enables it here, measured.)
+      ELECTRON_EXTRA_ARGS: "${ELECTRON_EXTRA_ARGS:-}"
+      #
+      # Git identity for commits agents (and the hive's single committer) make.
+      # A fresh volume has none, and your host ~/.gitconfig isn't mounted.
+      GIT_USER_NAME: "${GIT_USER_NAME:-}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-}"
+    # Ollama / LM Studio / vLLM usually run on the host, where `localhost` from
+    # inside the container is the container itself. Reach them at
+    # http://host.docker.internal:11434 (Docker Desktop defines this already;
+    # host-gateway is what makes it work on Linux). The model server has to be
+    # listening on 0.0.0.0, not 127.0.0.1, for the container to connect.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Everything worth keeping: app config (~/.config), agent CLI logins
+      # (~/.claude), the hive, and any CLI the app installs for itself.
+      - munder-home:/home/node
+      # The code your agents work on. Create it first (`mkdir -p workspace`) so
+      # Docker doesn't make it root-owned. The container runs as uid 1000: if
+      # your host account is a different uid, `chown -R 1000:1000 workspace`
+      # or agents can read it but not write to it.
+      - ./workspace:/workspace
+    working_dir: /workspace
+
+volumes:
+  munder-home:
